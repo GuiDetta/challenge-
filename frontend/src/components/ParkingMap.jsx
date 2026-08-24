@@ -23,6 +23,9 @@ function ParkingMap({
   selectedChargerId,
   onChargerSelect = () => {},
   onDevicePlaced = () => {},
+  onChargerUpdate = () => {},
+  onChargerDelete = () => {},
+  ownerId = null,
 }) {
   const [uploadState, setUploadState] = useState("idle");
   const [uploadError, setUploadError] = useState("");
@@ -38,7 +41,11 @@ function ParkingMap({
     rotation: 0,
   });
   const [planSize, setPlanSize] = useState({ width: 0, height: 0 });
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteCode, setDeleteCode] = useState("");
+  const [deleteError, setDeleteError] = useState("");
   const dragRef = useRef(null);
+  const chargerDragRef = useRef(null);
   const planRef = useRef(null);
   const canvasRef = useRef(null);
   const markerRefs = useRef({});
@@ -176,10 +183,15 @@ function ParkingMap({
   async function handleCanvasClick(event) {
     if (
       event.target.closest(
-        ".map-controls, .map-toolbar, .device-marker, .charger-popup",
+        ".map-controls, .map-toolbar, .device-marker, .charger-popup, .delete-confirm-backdrop, .delete-confirm-modal",
       )
     )
       return;
+
+    if (selectedChargerId && !pendingDevice) {
+      onChargerSelect(null);
+    }
+
     if (pendingDevice && uploadedPlan) {
       const svg = planRef.current?.querySelector("svg");
       const matrix = svg?.getScreenCTM?.();
@@ -211,7 +223,10 @@ function ParkingMap({
           `${API_URL}/api/plans/${uploadedPlan.plan_id}/chargers`,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "X-User-Id": ownerId || "",
+            },
             body: JSON.stringify({
               name: pendingDevice.name,
               x: mapPoint.x,
@@ -221,6 +236,7 @@ function ParkingMap({
               model: "GW11K-HCA-20",
               power_kw: 11,
               phase: "three",
+              kind: pendingDevice.kind || "simulated",
             }),
           },
         );
@@ -270,7 +286,7 @@ function ParkingMap({
   function handlePointerDown(event) {
     if (
       event.target.closest(
-        "[data-room-id], .map-controls, .map-toolbar, .device-marker, .charger-popup",
+        "[data-room-id], .map-controls, .map-toolbar, .device-marker, .charger-popup, .delete-confirm-backdrop, .delete-confirm-modal",
       )
     )
       return;
@@ -283,6 +299,10 @@ function ParkingMap({
   }
 
   function handlePointerMove(event) {
+    if (chargerDragRef.current) {
+      handleChargerMove(event);
+      return;
+    }
     if (!dragRef.current) return;
     const { startX, startY, initial } = dragRef.current;
     const deltaX = event.clientX - startX;
@@ -302,8 +322,175 @@ function ParkingMap({
   }
 
   function handlePointerUp() {
+    if (chargerDragRef.current && uploadedPlan) {
+      const { deviceId, initial } = chargerDragRef.current;
+      const nextPoint = chargerDragRef.current.preview;
+      if (nextPoint) {
+        const room = uploadedPlan.rooms.find(
+          (candidate) =>
+            nextPoint.x >= candidate.bounds.x &&
+            nextPoint.x <= candidate.bounds.x + candidate.bounds.width &&
+            nextPoint.y >= candidate.bounds.y &&
+            nextPoint.y <= candidate.bounds.y + candidate.bounds.height,
+        );
+        const payload = {
+          x: nextPoint.x,
+          y: nextPoint.y,
+          room_id: room?.id || null,
+        };
+
+        fetch(
+          `${API_URL}/api/plans/${uploadedPlan.plan_id}/chargers/${deviceId}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          },
+        )
+          .then(async (response) => {
+            if (!response.ok) {
+              throw new Error(
+                "Não foi possível atualizar a posição do carregador.",
+              );
+            }
+            const updatedCharger = await response.json();
+            onChargerUpdate(updatedCharger);
+          })
+          .catch(() => {
+            setUploadNotice("Não foi possível mover o carregador no mapa.");
+            window.setTimeout(() => setUploadNotice(""), 2600);
+            onChargerUpdate({
+              ...devices.find((device) => device.id === deviceId),
+              x: initial.x,
+              y: initial.y,
+            });
+          });
+      }
+    }
     dragRef.current = null;
+    chargerDragRef.current = null;
   }
+
+  function getMapPointFromEvent(event) {
+    const svg = planRef.current?.querySelector("svg");
+    if (!svg) return null;
+    const matrix = svg.getScreenCTM?.();
+    if (!matrix) return null;
+    const point = svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const transformedPoint = point.matrixTransform(matrix.inverse());
+    const viewBox = svg.viewBox.baseVal;
+    return {
+      x: Math.min(
+        viewBox.x + viewBox.width,
+        Math.max(viewBox.x, transformedPoint.x),
+      ),
+      y: Math.min(
+        viewBox.y + viewBox.height,
+        Math.max(viewBox.y, transformedPoint.y),
+      ),
+    };
+  }
+
+  function beginChargerDrag(event, device) {
+    if (!uploadedPlan) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const nextPreview = { x: device.x, y: device.y };
+    chargerDragRef.current = {
+      deviceId: device.id,
+      initial: { x: device.x, y: device.y },
+      preview: nextPreview,
+    };
+    onChargerSelect(device.id);
+  }
+
+  function handleChargerMove(event) {
+    if (!chargerDragRef.current || !uploadedPlan) return;
+    const mapPoint = getMapPointFromEvent(event);
+    if (!mapPoint) return;
+    const { deviceId, initial } = chargerDragRef.current;
+    if (!deviceId) return;
+    const nextPreview = {
+      x: Number(
+        Math.min(Math.max(mapPoint.x, 0), uploadedPlan.width).toFixed(2),
+      ),
+      y: Number(
+        Math.min(Math.max(mapPoint.y, 0), uploadedPlan.height).toFixed(2),
+      ),
+    };
+    chargerDragRef.current = {
+      ...chargerDragRef.current,
+      initial,
+      preview: nextPreview,
+    };
+    onChargerUpdate({
+      ...devices.find((device) => device.id === deviceId),
+      x: nextPreview.x,
+      y: nextPreview.y,
+    });
+  }
+
+  async function confirmDelete(targetCharger) {
+    if (!targetCharger || !uploadedPlan) return;
+    const closeDeleteModal = () => {
+      setDeleteTarget(null);
+      setDeleteCode("");
+      setDeleteError("");
+      onChargerSelect(null);
+    };
+
+    try {
+      if (targetCharger.kind !== "real") {
+        const response = await fetch(
+          `${API_URL}/api/plans/${uploadedPlan.plan_id}/chargers/${targetCharger.id}`,
+          { method: "DELETE" },
+        );
+        if (!response.ok) {
+          setUploadNotice("Não foi possível excluir o carregador simulado.");
+          window.setTimeout(() => setUploadNotice(""), 2600);
+          return;
+        }
+        onChargerDelete(targetCharger.id);
+        closeDeleteModal();
+        return;
+      }
+
+      const normalizedCode = deleteCode.trim();
+      if (!normalizedCode) {
+        setDeleteError(
+          "Digite o código do carregador para confirmar a exclusão.",
+        );
+        return;
+      }
+
+      const deleteUrl = `${API_URL}/api/plans/${uploadedPlan.plan_id}/chargers/${targetCharger.id}?code=${encodeURIComponent(normalizedCode)}`;
+      const response = await fetch(deleteUrl, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        setDeleteError(
+          "Código inválido. Verifique o código exibido no carregador.",
+        );
+        return;
+      }
+
+      onChargerDelete(targetCharger.id);
+      closeDeleteModal();
+    } catch (error) {
+      setDeleteError("Não foi possível concluir a exclusão. Tente novamente.");
+      console.error("delete charger failed", error);
+    }
+  }
+
+  const closeDeleteModal = () => {
+    setDeleteTarget(null);
+    setDeleteCode("");
+    setDeleteError("");
+    onChargerSelect(null);
+  };
 
   function chargerStatusClass(status) {
     if (status === "charging") return "charging";
@@ -516,6 +703,7 @@ function ParkingMap({
                     type="button"
                     key={device.id}
                     aria-label={`${device.name} - ${device.telemetry?.status || "sem status"}`}
+                    onPointerDown={(event) => beginChargerDrag(event, device)}
                     onClick={(event) => {
                       event.stopPropagation();
                       onChargerSelect(device.id);
@@ -554,15 +742,21 @@ function ParkingMap({
             </button>
             <strong>{selectedCharger.name}</strong>
             <span>{selectedCharger.model || "GoodWe HCA G2"}</span>
+            <span className="charger-popup-code">
+              Código: {selectedCharger.code || "HC2-0000"}
+            </span>
             <dl>
               <div>
                 <dt>Estado</dt>
                 <dd>
                   {selectedCharger.telemetry?.status === "charging"
                     ? "Carregando"
-                    : ["available", "preparing", "suspended", "finished"].includes(
-                          selectedCharger.telemetry?.status,
-                        )
+                    : [
+                          "available",
+                          "preparing",
+                          "suspended",
+                          "finished",
+                        ].includes(selectedCharger.telemetry?.status)
                       ? "Standby"
                       : "Falha"}
                 </dd>
@@ -591,15 +785,11 @@ function ParkingMap({
               </div>
               <div>
                 <dt>Energia total</dt>
-                <dd>
-                  {selectedCharger.telemetry?.energy_kwh ?? "0"} kWh
-                </dd>
+                <dd>{selectedCharger.telemetry?.energy_kwh ?? "0"} kWh</dd>
               </div>
               <div>
                 <dt>Temperatura</dt>
-                <dd>
-                  {selectedCharger.telemetry?.temperature_c ?? "-"} °C
-                </dd>
+                <dd>{selectedCharger.telemetry?.temperature_c ?? "-"} °C</dd>
               </div>
               <div>
                 <dt>Veículo</dt>
@@ -610,6 +800,87 @@ function ParkingMap({
                 </dd>
               </div>
             </dl>
+            <button
+              type="button"
+              className="delete-charger-button"
+              onClick={() => {
+                setDeleteTarget(selectedCharger);
+                setDeleteCode("");
+                setDeleteError("");
+              }}
+            >
+              Desativar carregador
+            </button>
+          </div>
+        )}
+        {deleteTarget && (
+          <div
+            className="delete-confirm-backdrop"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={closeDeleteModal}
+          >
+            <div
+              className="delete-confirm-modal"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="delete-confirm-close"
+                aria-label="Fechar confirmação de desativação"
+                onClick={closeDeleteModal}
+              >
+                ×
+              </button>
+              <h3>Deseja desativar?</h3>
+              <p>
+                {deleteTarget.kind === "real"
+                  ? "Este aparelho será desativado e continuará disponível no histórico. Para confirmar, digite o código único abaixo."
+                  : "Este carregador será desativado e poderá ser consultado posteriormente."}
+              </p>
+              {deleteTarget.kind === "real" && (
+                <div className="delete-code-field">
+                  <label htmlFor="delete-code-input">
+                    Código do carregador
+                  </label>
+                  <div className="delete-code-input-shell">
+                    <span className="delete-code-hint">
+                      {deleteTarget.code || "HC2-0000"}
+                    </span>
+                    <input
+                      id="delete-code-input"
+                      type="text"
+                      value={deleteCode}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          confirmDelete(deleteTarget);
+                        }
+                      }}
+                      onChange={(event) =>
+                        setDeleteCode(event.target.value.toUpperCase())
+                      }
+                      placeholder=""
+                    />
+                  </div>
+                </div>
+              )}
+              {deleteError && (
+                <p className="delete-confirm-error">{deleteError}</p>
+              )}
+              <div className="delete-confirm-actions">
+                <button type="button" onClick={closeDeleteModal}>
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="delete-confirm-primary"
+                  onClick={() => confirmDelete(deleteTarget)}
+                >
+                  Confirmar
+                </button>
+              </div>
+            </div>
           </div>
         )}
         {uploadState === "error" && (

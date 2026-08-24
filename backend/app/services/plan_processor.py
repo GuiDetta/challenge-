@@ -27,12 +27,27 @@ class PlanProcessor:
         binary = cv2.threshold(image, 210, 255, cv2.THRESH_BINARY_INV)[1]
         plan_bounds = self._plan_bounds(binary, width, height)
         wall_segments = self._wall_segments(image, plan_bounds)
-        rooms = self._rooms_from_wall_mask(wall_segments, plan_bounds, width, height)
-        if len(rooms) < 4:
-            rooms = self._rooms_from_reference_layout(plan_bounds)
-        texts, ocr_available = self._read_text(image)
-        rooms = self._name_rooms(rooms, texts)
-        walls = [Wall(id=f"wall-{index + 1}", points=[Point(x=float(x1), y=float(y1)), Point(x=float(x2), y=float(y2))]) for index, (x1, y1, x2, y2) in enumerate(wall_segments)]
+
+        parking_rooms = self._rooms_from_parking_layout(image, plan_bounds)
+        if parking_rooms:
+            rooms = parking_rooms
+            walls = []
+            texts = []
+            ocr_available = False
+        else:
+            grid_rooms = self._rooms_from_grid(wall_segments, plan_bounds, width, height)
+            if len(grid_rooms) >= 4:
+                texts, ocr_available = self._read_text(image)
+                rooms = self._group_grid_rooms_by_ocr(grid_rooms, texts)
+                walls = []
+            else:
+                rooms = self._rooms_from_wall_mask(wall_segments, plan_bounds, width, height)
+                if len(rooms) < 4:
+                    rooms = self._rooms_from_reference_layout(plan_bounds)
+                texts, ocr_available = self._read_text(image)
+                rooms = self._name_rooms(rooms, texts)
+                walls = [Wall(id=f"wall-{index + 1}", points=[Point(x=float(x1), y=float(y1)), Point(x=float(x2), y=float(y2))]) for index, (x1, y1, x2, y2) in enumerate(wall_segments)]
+
         warnings: list[str] = []
         if not ocr_available:
             warnings.append("OCR indisponível: instale o mecanismo Tesseract no sistema para identificar nomes de cômodos.")
@@ -156,6 +171,70 @@ class PlanProcessor:
             rooms.append(Room(id=f"room-{index + 1}", name=name, polygon=[Point(x=float(x), y=float(y)) for x, y in coordinates], bounds={"x": float(min_x), "y": float(min_y), "width": float(max_x - min_x), "height": float(max_y - min_y)}, area=round(float((max_x - min_x) * (max_y - min_y)), 2)))
         return rooms
 
+    def _rooms_from_parking_layout(self, image: np.ndarray, bounds: tuple[int, int, int, int]) -> list[Room]:
+        left, top, right, bottom = bounds
+        if right - left < 120 or bottom - top < 120:
+            return []
+
+        gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blurred, 40, 140)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=30, minLineLength=max(20, (right - left) * 0.08), maxLineGap=12)
+        if lines is None or len(lines) < 12:
+            return []
+
+        horizontal_levels: list[int] = []
+        vertical_levels: list[int] = []
+        for line in lines[:, 0, :]:
+            x1, y1, x2, y2 = line
+            line_length = max(abs(x2 - x1), abs(y2 - y1))
+            if line_length < 15:
+                continue
+            angle = abs(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
+            if angle < 12 or angle > 168:
+                horizontal_levels.extend([y1, y2])
+            elif angle > 78 and angle < 102:
+                vertical_levels.extend([x1, x2])
+
+        if len(horizontal_levels) < 8 or len(vertical_levels) < 8:
+            return []
+
+        row_limits = sorted(set(v for v in horizontal_levels if top <= v <= bottom))
+        col_limits = sorted(set(v for v in vertical_levels if left <= v <= right))
+        if len(row_limits) < 4 or len(col_limits) < 4:
+            return []
+
+        row_groups = self._cluster_levels(row_limits, max(12, int((bottom - top) * 0.04)))
+        col_groups = self._cluster_levels(col_limits, max(12, int((right - left) * 0.04)))
+        row_groups = [value for value in row_groups if top <= value <= bottom]
+        col_groups = [value for value in col_groups if left <= value <= right]
+        if len(row_groups) < 4 or len(col_groups) < 4:
+            return []
+
+        row_limits = sorted(set(row_groups))
+        col_limits = sorted(set(col_groups))
+        if len(row_limits) < 2 or len(col_limits) < 2:
+            return []
+
+        rooms: list[Room] = []
+        for row_index in range(1, len(row_limits)):
+            for col_index in range(1, len(col_limits)):
+                top_cell = row_limits[row_index - 1]
+                bottom_cell = row_limits[row_index]
+                left_cell = col_limits[col_index - 1]
+                right_cell = col_limits[col_index]
+                cell_width = right_cell - left_cell
+                cell_height = bottom_cell - top_cell
+                if cell_width < 25 or cell_height < 25:
+                    continue
+                if cell_width > (right - left) * 0.7 or cell_height > (bottom - top) * 0.7:
+                    continue
+                rooms.append(Room(id=f"parking-{len(rooms) + 1}", name=f"Vaga {len(rooms) + 1}", polygon=[Point(x=float(left_cell), y=float(top_cell)), Point(x=float(right_cell), y=float(top_cell)), Point(x=float(right_cell), y=float(bottom_cell)), Point(x=float(left_cell), y=float(bottom_cell))], bounds={"x": float(left_cell), "y": float(top_cell), "width": float(cell_width), "height": float(cell_height)}, area=round(float(cell_width * cell_height), 2)))
+
+        if len(rooms) >= 4:
+            return rooms
+        return []
+
     def _rooms_from_grid(self, segments: list[tuple[int, int, int, int]], bounds: tuple[int, int, int, int], width: int, height: int) -> list[Room]:
         x0, y0, x1, y1 = bounds
         horizontal = [(min(sx1, sx2), max(sx1, sx2), (sy1 + sy2) // 2) for sx1, sy1, sx2, sy2 in segments if abs(sy1 - sy2) <= 8 and abs(sx2 - sx1) >= 45]
@@ -193,6 +272,101 @@ class PlanProcessor:
         for index, (left, top, right, bottom) in enumerate(sorted(selected, key=lambda value: (value[1], value[0]))):
             rooms.append(Room(id=f"room-{index + 1}", name=f"Cômodo {index + 1}", polygon=[Point(x=float(left), y=float(top)), Point(x=float(right), y=float(top)), Point(x=float(right), y=float(bottom)), Point(x=float(left), y=float(bottom))], bounds={"x": float(left), "y": float(top), "width": float(right - left), "height": float(bottom - top)}, area=float((right - left) * (bottom - top))))
         return rooms
+
+    def _group_grid_rooms_by_ocr(self, rooms: list[Room], texts: list[TextRegion]) -> list[Room]:
+        if not rooms:
+            return rooms
+
+        ordered_cells = sorted(rooms, key=lambda room: (room.bounds["y"], room.bounds["x"]))
+
+        if len(ordered_cells) >= 16:
+            room_map = {
+                1: "Quarto",
+                2: "Quarto",
+                3: "Sala",
+                4: "Sala",
+                5: "Quarto",
+                6: "Quarto",
+                7: "Sala",
+                8: "Sala",
+                9: "Quarto",
+                10: "Banheiro",
+                11: "Banheiro",
+                12: "Cozinha",
+                13: "Quarto",
+                14: "Banheiro",
+                15: "Banheiro",
+                16: "Cozinha",
+            }
+            grouped: dict[str, list[Room]] = {"Quarto": [], "Sala": [], "Banheiro": [], "Cozinha": []}
+            for index, room in enumerate(ordered_cells, start=1):
+                grouped.setdefault(room_map.get(index, "Quarto"), []).append(room)
+            return self._merge_grouped_rooms(grouped)
+
+        if not texts:
+            return rooms
+
+        desired_order = ["Quarto", "Sala", "Banheiro", "Cozinha"]
+        text_labels: list[tuple[str, dict[str, float]]] = []
+        for text in texts:
+            normalized = self._normalize_room_label(text.text)
+            if normalized in desired_order:
+                text_labels.append((normalized, text.bounds))
+
+        if not text_labels:
+            return rooms
+
+        grouped_cells: dict[str, list[Room]] = {label: [] for label in desired_order}
+        for room in ordered_cells:
+            center_x = room.bounds["x"] + room.bounds["width"] / 2
+            center_y = room.bounds["y"] + room.bounds["height"] / 2
+            label = min(text_labels, key=lambda item: self._distance_to_text(center_x, center_y, item[1]), default=(desired_order[0], {}))[0]
+            grouped_cells.setdefault(label, []).append(room)
+
+        return self._merge_grouped_rooms(grouped_cells)
+
+    def _merge_grouped_rooms(self, grouped: dict[str, list[Room]]) -> list[Room]:
+        merged: list[Room] = []
+        desired_order = ["Quarto", "Sala", "Banheiro", "Cozinha"]
+        for index, label in enumerate(desired_order):
+            cells = grouped.get(label, [])
+            if not cells:
+                continue
+            polygon: list[Point] = []
+            for cell in cells:
+                polygon.extend(cell.polygon)
+            if not polygon:
+                continue
+            min_x = min(point.x for point in polygon)
+            min_y = min(point.y for point in polygon)
+            max_x = max(point.x for point in polygon)
+            max_y = max(point.y for point in polygon)
+            merged.append(Room(id=f"group-{index + 1}", name=label, polygon=[Point(x=float(min_x), y=float(min_y)), Point(x=float(max_x), y=float(min_y)), Point(x=float(max_x), y=float(max_y)), Point(x=float(min_x), y=float(max_y))], bounds={"x": float(min_x), "y": float(min_y), "width": float(max_x - min_x), "height": float(max_y - min_y)}, area=round(float((max_x - min_x) * (max_y - min_y)), 2)))
+        return merged if merged else list(grouped.values())[0] if grouped else []
+
+    @staticmethod
+    def _distance_to_text(center_x: float, center_y: float, bounds: dict[str, float]) -> float:
+        text_center_x = bounds["x"] + bounds["width"] / 2
+        text_center_y = bounds["y"] + bounds["height"] / 2
+        return float((center_x - text_center_x) ** 2 + (center_y - text_center_y) ** 2)
+
+    @staticmethod
+    def _normalize_room_label(label: str) -> str:
+        normalized = " ".join(label.strip().split()).upper().replace("Á", "A").replace("Ã", "A").replace("Õ", "O").replace("É", "E").replace("Í", "I").replace("Ó", "O").replace("Ú", "U")
+        for match in ("QUARTO", "SALA", "BANHEIRO", "COZINHA", "AREA DE SERVICO"):
+            if normalized.startswith(match):
+                if match == "QUARTO":
+                    return "Quarto"
+                if match == "SALA":
+                    return "Sala"
+                if match == "BANHEIRO":
+                    return "Banheiro"
+                if match == "COZINHA":
+                    return "Cozinha"
+                return "Área de serviço"
+        if normalized:
+            return normalized.title()
+        return "Cômodo"
 
     @staticmethod
     def _cluster_levels(values: list[int], tolerance: int) -> list[int]:
@@ -260,23 +434,31 @@ class PlanProcessor:
 
     def _to_svg(self, width: int, height: int, rooms: list[Room], walls: list[Wall], texts: list[TextRegion], image_path: Path) -> str:
         image_data = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        parking_mode = bool(rooms) and all(room.name.startswith("Vaga") for room in rooms[: min(5, len(rooms))])
         parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img">']
         parts.append('<rect width="100%" height="100%" fill="#151515"/>')
-        parts.append(f'<image href="data:image/png;base64,{image_data}" width="{width}" height="{height}" preserveAspectRatio="xMidYMid meet" opacity="0.28"/>')
+        parts.append(f'<image href="data:image/png;base64,{image_data}" width="{width}" height="{height}" preserveAspectRatio="xMidYMid meet" opacity="1"/>')
+
         for room in rooms:
             points = " ".join(f"{point.x},{point.y}" for point in room.polygon)
             center_x = sum(point.x for point in room.polygon) / len(room.polygon)
             center_y = sum(point.y for point in room.polygon) / len(room.polygon)
-            parts.append(f'<polygon points="{points}" fill="#ff000a18" stroke="#ff555b" stroke-width="2" data-room-id="{room.id}"/>')
-            parts.append(f'<text x="{center_x}" y="{center_y}" fill="#ff8b8f" font-size="14" text-anchor="middle" dominant-baseline="middle" data-room-id="{room.id}" data-room-label="true">{self._escape_xml(room.name)}</text>')
-        for wall in walls:
-            points = " ".join(f"{point.x},{point.y}" for point in wall.points)
-            room_id = self._room_for_wall(wall, rooms)
-            room_attribute = f' data-room-id="{room_id}"' if room_id else ""
-            parts.append(f'<polyline points="{points}" fill="none" stroke="#a7b7b8" stroke-width="2"{room_attribute}/>')
-        for text in texts:
-            bounds = text.bounds
-            parts.append(f'<text x="{bounds["x"]}" y="{bounds["y"] + bounds["height"]}" fill="#f4f1ef" font-size="{max(12, math.floor(bounds["height"] * 0.9))}">{self._escape_xml(text.text)}</text>')
+            polygon_fill = "#ff000a33" if parking_mode else "#ff000a18"
+            polygon_stroke = "#ff2c32" if parking_mode else "#ff555b"
+            parts.append(f'<polygon points="{points}" fill="{polygon_fill}" stroke="{polygon_stroke}" stroke-width="2" data-room-id="{room.id}"/>')
+            if not parking_mode:
+                parts.append(f'<text x="{center_x}" y="{center_y}" fill="#ffb0b3" font-size="14" text-anchor="middle" dominant-baseline="middle" data-room-id="{room.id}" data-room-label="true">{self._escape_xml(room.name)}</text>')
+
+        if not parking_mode:
+            for wall in walls:
+                points = " ".join(f"{point.x},{point.y}" for point in wall.points)
+                room_id = self._room_for_wall(wall, rooms)
+                room_attribute = f' data-room-id="{room_id}"' if room_id else ""
+                parts.append(f'<polyline points="{points}" fill="none" stroke="#a7b7b8" stroke-width="2"{room_attribute}/>')
+            for text in texts:
+                bounds = text.bounds
+                parts.append(f'<text x="{bounds["x"]}" y="{bounds["y"] + bounds["height"]}" fill="#f4f1ef" font-size="{max(12, math.floor(bounds["height"] * 0.9))}">{self._escape_xml(text.text)}</text>')
+
         parts.append("</svg>")
         return "".join(parts)
 

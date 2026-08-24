@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from hashlib import pbkdf2_hmac
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,12 @@ class Database:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
+
+    @staticmethod
+    def generate_device_code() -> str:
+        from uuid import uuid4
+
+        return f"HC2-{uuid4().hex[:6].upper()}"
 
     def initialize(self) -> None:
         with self.connect() as connection:
@@ -51,6 +58,8 @@ class Database:
                     power_kw REAL,
                     phase TEXT,
                     rated_current_a REAL,
+                    kind TEXT NOT NULL DEFAULT 'simulated',
+                    code TEXT,
                     x REAL NOT NULL,
                     y REAL NOT NULL,
                     metadata_json TEXT NOT NULL DEFAULT '{}',
@@ -96,12 +105,74 @@ class Database:
                     created_at TEXT NOT NULL,
                     cleared_at TEXT
                 );
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    email TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('lojista', 'cliente', 'instalador')),
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS charging_orders (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    charger_code TEXT NOT NULL,
+                    energy_kwh REAL NOT NULL,
+                    price_per_kwh REAL NOT NULL,
+                    total_amount REAL NOT NULL,
+                    scheduled_at TEXT NOT NULL,
+                    estimated_duration_minutes INTEGER NOT NULL,
+                    payment_method TEXT NOT NULL CHECK (payment_method IN ('pix', 'paypal', 'wallet')),
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS wallet_transactions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    amount REAL NOT NULL,
+                    type TEXT NOT NULL CHECK (type IN ('top_up', 'debit')),
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+                CREATE INDEX IF NOT EXISTS idx_orders_user ON charging_orders(user_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_transactions(user_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_rooms_plan ON rooms(plan_id);
                 CREATE INDEX IF NOT EXISTS idx_devices_plan ON devices(plan_id);
                 CREATE INDEX IF NOT EXISTS idx_snapshots_charger_time ON charger_snapshots(charger_id, recorded_at);
                 CREATE INDEX IF NOT EXISTS idx_alarms_charger_active ON alarms(charger_id, active);
                 """
             )
+            self.ensure_device_kind_column()
+            self.ensure_device_code_column()
+            self.ensure_device_owner_column()
+            self.ensure_device_active_column()
+
+    def ensure_device_kind_column(self) -> None:
+        with self.connect() as connection:
+            columns = connection.execute("PRAGMA table_info(devices)").fetchall()
+            if not any(column[1] == "kind" for column in columns):
+                connection.execute("ALTER TABLE devices ADD COLUMN kind TEXT NOT NULL DEFAULT 'simulated'")
+
+    def ensure_device_code_column(self) -> None:
+        with self.connect() as connection:
+            columns = connection.execute("PRAGMA table_info(devices)").fetchall()
+            if not any(column[1] == "code" for column in columns):
+                connection.execute("ALTER TABLE devices ADD COLUMN code TEXT")
+            rows = connection.execute("SELECT id FROM devices WHERE code IS NULL OR code = ''").fetchall()
+            for row in rows:
+                connection.execute("UPDATE devices SET code = ? WHERE id = ?", (self.generate_device_code(), row["id"]))
+
+    def ensure_device_owner_column(self) -> None:
+        with self.connect() as connection:
+            columns = connection.execute("PRAGMA table_info(devices)").fetchall()
+            if not any(column[1] == "owner_id" for column in columns):
+                connection.execute("ALTER TABLE devices ADD COLUMN owner_id TEXT")
+
+    def ensure_device_active_column(self) -> None:
+        with self.connect() as connection:
+            columns = connection.execute("PRAGMA table_info(devices)").fetchall()
+            if not any(column[1] == "active" for column in columns):
+                connection.execute("ALTER TABLE devices ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
 
     @staticmethod
     def now() -> str:
@@ -121,24 +192,66 @@ class Database:
             rooms = connection.execute("SELECT * FROM rooms WHERE plan_id = ? ORDER BY id", (plan_id,)).fetchall()
         return {"plan_id": row["id"], "width": row["width"], "height": row["height"], "svg": row["svg"], "rooms": [{"id": room["id"], "name": room["name"], "polygon": json.loads(room["polygon_json"]), "bounds": json.loads(room["bounds_json"]), "area": room["area"]} for room in rooms], "walls": [], "texts": [], "ocr_available": bool(row["ocr_available"]), "warnings": json.loads(row["warnings_json"])}
 
-    def add_device(self, plan_id: str, device: dict[str, Any]) -> None:
+    def list_plans_for_owner(self, owner_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
-            connection.execute("INSERT INTO devices (id, plan_id, room_id, name, device_type, model, power_kw, phase, rated_current_a, x, y, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (device["id"], plan_id, device.get("room_id"), device["name"], device["device_type"], device.get("model"), device.get("power_kw"), device.get("phase"), device.get("rated_current_a"), device["x"], device["y"], json.dumps(device.get("metadata", {})), self.now()))
+            rows = connection.execute(
+                "SELECT DISTINCT p.id FROM plans p JOIN devices d ON d.plan_id = p.id WHERE d.owner_id = ? ORDER BY p.created_at",
+                (owner_id,),
+            ).fetchall()
+        return [plan for row in rows if (plan := self.get_plan(row["id"])) is not None]
+
+    def add_device(self, plan_id: str, device: dict[str, Any]) -> None:
+        metadata = dict(device.get("metadata", {}))
+        kind = device.get("kind") or metadata.get("kind") or "simulated"
+        code = device.get("code") or metadata.get("code") or self.generate_device_code()
+        metadata["kind"] = kind
+        metadata["code"] = code
+        with self.connect() as connection:
+            connection.execute("INSERT INTO devices (id, plan_id, room_id, name, device_type, model, power_kw, phase, rated_current_a, kind, code, owner_id, x, y, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (device["id"], plan_id, device.get("room_id"), device["name"], device["device_type"], device.get("model"), device.get("power_kw"), device.get("phase"), device.get("rated_current_a"), kind, code, device.get("owner_id"), device["x"], device["y"], json.dumps(metadata, ensure_ascii=False), self.now()))
+
+    def update_device(self, device_id: str, updates: dict[str, Any]) -> bool:
+        if not updates:
+            return True
+        assignments = []
+        params: list[Any] = []
+        for key, value in updates.items():
+            assignments.append(f"{key} = ?")
+            params.append(value)
+        params.append(device_id)
+        with self.connect() as connection:
+            cursor = connection.execute(f"UPDATE devices SET {', '.join(assignments)} WHERE id = ?", params)
+        return cursor.rowcount > 0
 
     def get_device(self, device_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute("SELECT * FROM devices WHERE id = ?", (device_id,)).fetchone()
         return self._device(row) if row else None
 
-    def list_devices(self, plan_id: str, device_type: str | None = None) -> list[dict[str, Any]]:
+    def list_devices(self, plan_id: str, device_type: str | None = None, owner_id: str | None = None, include_inactive: bool = False) -> list[dict[str, Any]]:
         query = "SELECT * FROM devices WHERE plan_id = ?"
         params: list[Any] = [plan_id]
+        if not include_inactive:
+            query += " AND active = 1"
         if device_type:
             query += " AND device_type = ?"
             params.append(device_type)
+        if owner_id:
+            query += " AND owner_id = ?"
+            params.append(owner_id)
         with self.connect() as connection:
             rows = connection.execute(query + " ORDER BY name", params).fetchall()
         return [self._device(row) for row in rows]
+
+    def list_real_chargers(self, owner_id: str, include_inactive: bool = False) -> list[dict[str, Any]]:
+        active_filter = "" if include_inactive else " AND active = 1"
+        with self.connect() as connection:
+            rows = connection.execute(f"SELECT * FROM devices WHERE device_type = ? AND kind = ? AND owner_id = ?{active_filter} ORDER BY name", ("charger", "real", owner_id)).fetchall()
+        return [self._device(row) for row in rows]
+
+    def deactivate_device(self, device_id: str) -> bool:
+        with self.connect() as connection:
+            cursor = connection.execute("UPDATE devices SET active = 0 WHERE id = ?", (device_id,))
+        return cursor.rowcount > 0
 
     def delete_device(self, device_id: str) -> bool:
         with self.connect() as connection:
@@ -146,8 +259,122 @@ class Database:
         return cursor.rowcount > 0
 
     @staticmethod
+    def hash_password(password: str) -> str:
+        return pbkdf2_hmac("sha256", password.encode(), b"goodwe-salt-v1", 120_000).hex()
+
+    def create_user(self, user: dict[str, Any]) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute("INSERT INTO users (id, name, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, ?)", (user["id"], user["name"], user["email"].lower(), self.hash_password(user["password"]), user["role"], self.now()))
+        return self.get_user(user["id"])
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT id, name, email, role, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+    def authenticate_user(self, email: str, password: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM users WHERE email = ?", (email.lower(),)).fetchone()
+        if not row or row["password_hash"] != self.hash_password(password):
+            return None
+        user = {key: row[key] for key in ("id", "name", "email", "role", "created_at")}
+        with self.connect() as connection:
+            balance = connection.execute("SELECT COALESCE(SUM(CASE WHEN type = 'top_up' THEN amount ELSE -amount END), 0) FROM wallet_transactions WHERE user_id = ?", (row["id"],)).fetchone()[0]
+        user["wallet_balance"] = round(float(balance), 2)
+        return user
+
+    def get_charger_by_code(self, code: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM devices WHERE code = ? AND device_type = 'charger' AND kind = 'real'", (code,)).fetchone()
+        return self._device(row) if row else None
+
+    def activate_charger_by_code(self, code: str) -> bool:
+        charger = self.get_charger_by_code(code)
+        if charger is None:
+            return False
+        metadata = {**(charger.get("metadata") or {}), "payment_active": "true"}
+        with self.connect() as connection:
+            cursor = connection.execute("UPDATE devices SET metadata_json = ? WHERE id = ?", (json.dumps(metadata, ensure_ascii=False), charger["id"]))
+        return cursor.rowcount > 0
+
+    def create_order(self, order: dict[str, Any]) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute("INSERT INTO charging_orders (id, user_id, charger_code, energy_kwh, price_per_kwh, total_amount, scheduled_at, estimated_duration_minutes, payment_method, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (order["id"], order["user_id"], order["charger_code"], order["energy_kwh"], order["price_per_kwh"], order["total_amount"], order["scheduled_at"], order["estimated_duration_minutes"], order["payment_method"], "active", self.now()))
+        return self.get_order(order["id"])
+
+    def complete_due_orders(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.connect() as connection:
+            rows = connection.execute("SELECT id, charger_code, created_at, estimated_duration_minutes FROM charging_orders WHERE status = 'active'").fetchall()
+            for row in rows:
+                started_at = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+                if now < started_at + timedelta(minutes=row["estimated_duration_minutes"]):
+                    continue
+                connection.execute("UPDATE charging_orders SET status = 'completed' WHERE id = ?", (row["id"],))
+                charger = connection.execute("SELECT id, metadata_json FROM devices WHERE code = ?", (row["charger_code"],)).fetchone()
+                if charger:
+                    metadata = json.loads(charger["metadata_json"] or "{}")
+                    metadata["payment_active"] = "false"
+                    connection.execute("UPDATE devices SET metadata_json = ? WHERE id = ?", (json.dumps(metadata, ensure_ascii=False), charger["id"]))
+
+    def get_order(self, order_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM charging_orders WHERE id = ?", (order_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_active_order_for_charger(self, charger_code: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM charging_orders WHERE charger_code = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1", (charger_code,)).fetchone()
+        return dict(row) if row else None
+
+    def add_wallet_transaction(self, transaction: dict[str, Any]) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute("INSERT INTO wallet_transactions (id, user_id, amount, type, created_at) VALUES (?, ?, ?, ?, ?)", (transaction["id"], transaction["user_id"], transaction["amount"], transaction["type"], self.now()))
+        return transaction
+
+    def report_summary(self, owner_id: str | None = None) -> dict[str, Any]:
+        self.complete_due_orders()
+        local_now = datetime.now().astimezone()
+        month_prefix = local_now.strftime("%Y-%m")
+        with self.connect() as connection:
+            scope = " AND owner_id = ?" if owner_id else ""
+            params = (owner_id,) if owner_id else ()
+            charger_count = connection.execute(f"SELECT COUNT(*) FROM devices WHERE device_type = 'charger' AND kind = 'real' AND active = 1{scope}", params).fetchone()[0]
+            completed_rows = connection.execute(f"SELECT o.created_at, o.energy_kwh, o.total_amount, d.owner_id FROM charging_orders o JOIN devices d ON d.code = o.charger_code WHERE o.status = 'completed'{scope.replace('owner_id', 'd.owner_id')}", params).fetchall()
+            completed = [row for row in completed_rows if not owner_id or row["owner_id"] == owner_id]
+            revenue = sum(float(row["total_amount"]) for row in completed)
+            month_rows = [row for row in completed if datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")).astimezone().strftime("%Y-%m") == month_prefix]
+            month_revenue = sum(float(row["total_amount"]) for row in month_rows)
+            month_energy = sum(float(row["energy_kwh"]) for row in month_rows)
+            charger_rows = connection.execute(f"SELECT d.name, d.code, d.power_kw, COALESCE((SELECT SUM(o.energy_kwh) FROM charging_orders o WHERE o.charger_code = d.code AND o.status = 'completed'), 0) AS energy_kwh FROM devices d WHERE d.device_type = 'charger' AND d.kind = 'real' AND d.active = 1{scope} ORDER BY d.name", params).fetchall()
+        daily = {}
+        for row in completed:
+            day = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")).astimezone().date()
+            if day >= local_now.date() - timedelta(days=6):
+                item = daily.setdefault(day.isoformat(), {"energy_kwh": 0, "revenue": 0})
+                item["energy_kwh"] += float(row["energy_kwh"])
+                item["revenue"] += float(row["total_amount"])
+        days = []
+        for offset in range(6, -1, -1):
+            day = local_now.date().fromordinal(local_now.date().toordinal() - offset).isoformat()
+            days.append({"day": day, **daily.get(day, {"energy_kwh": 0, "revenue": 0})})
+        chargers = [dict(row) for row in charger_rows]
+        return {"charger_count": charger_count, "revenue_total": round(float(revenue), 2), "month_revenue": round(float(month_revenue), 2), "month_energy_kwh": round(float(month_energy), 2), "generated_energy_kwh": round(sum(float(item["energy_kwh"]) for item in chargers), 2), "chargers": chargers, "daily": days}
+
+    def assistant_orders(self, owner_id: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT o.charger_code, o.energy_kwh, o.total_amount, o.payment_method, o.status, o.created_at FROM charging_orders o JOIN devices d ON d.code = o.charger_code WHERE d.owner_id = ? ORDER BY o.created_at DESC LIMIT 50",
+                (owner_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
     def _device(row: sqlite3.Row) -> dict[str, Any]:
-        return {"id": row["id"], "plan_id": row["plan_id"], "room_id": row["room_id"], "name": row["name"], "device_type": row["device_type"], "model": row["model"], "power_kw": row["power_kw"], "phase": row["phase"], "rated_current_a": row["rated_current_a"], "x": row["x"], "y": row["y"], "metadata": json.loads(row["metadata_json"])}
+        metadata = json.loads(row["metadata_json"] or "{}")
+        kind = row["kind"] if "kind" in row.keys() else metadata.get("kind", "simulated")
+        code = row["code"] if "code" in row.keys() and row["code"] else metadata.get("code")
+        return {"id": row["id"], "plan_id": row["plan_id"], "room_id": row["room_id"], "name": row["name"], "device_type": row["device_type"], "model": row["model"], "power_kw": row["power_kw"], "phase": row["phase"], "rated_current_a": row["rated_current_a"], "kind": kind, "code": code, "owner_id": row["owner_id"] if "owner_id" in row.keys() else None, "active": bool(row["active"]) if "active" in row.keys() else True, "x": row["x"], "y": row["y"], "metadata": metadata}
 
     def save_snapshot(self, charger_id: str, snapshot: dict[str, Any]) -> int:
         with self.connect() as connection:

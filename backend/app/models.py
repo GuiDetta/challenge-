@@ -48,7 +48,11 @@ class ChargerCreate(BaseModel):
     power_kw: float = Field(default=11, gt=0, le=22)
     phase: Literal["single", "three"] = "three"
     rated_current_a: float | None = Field(default=None, gt=0)
+    kind: Literal["real", "simulated"] = "simulated"
+    code: str | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
+    owner_id: str | None = None
+    active: bool = True
 
 
 class Charger(ChargerCreate):
@@ -75,6 +79,60 @@ class ChargerSnapshot(BaseModel):
 
 class ChargerWithSnapshot(Charger):
     telemetry: ChargerSnapshot
+    active_session_started_at: str | None = None
+    active_session_duration_minutes: int | None = None
+    active_session_energy_kwh: float | None = None
+
+
+class PublicCharger(BaseModel):
+    code: str
+    name: str
+    model: str | None = None
+    power_kw: float | None = None
+    status: str
+    telemetry: ChargerSnapshot
+
+
+class UserCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    email: str = Field(min_length=5, max_length=180)
+    password: str = Field(min_length=6, max_length=128)
+    role: Literal["cliente", "lojista", "instalador"] = "cliente"
+
+
+class UserLogin(BaseModel):
+    email: str = Field(min_length=5, max_length=180)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class ChargingOrderCreate(BaseModel):
+    user_id: str
+    charger_code: str
+    energy_kwh: float = Field(gt=0, le=500)
+    payment_method: Literal["pix", "paypal", "wallet"]
+
+
+class WalletTopUp(BaseModel):
+    user_id: str
+    amount: Literal[10, 25, 50, 100]
+
+
+class AssistantMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class AssistantChatRequest(BaseModel):
+    owner_id: str = Field(min_length=1)
+    message: str = Field(min_length=1, max_length=4000)
+    history: list[AssistantMessage] = Field(default_factory=list, max_length=20)
+
+
+class AssistantChatResponse(BaseModel):
+    role: Literal["assistant"] = "assistant"
+    content: str
+    system_alerts: list[str] = Field(default_factory=list)
+    provider: Literal["openai", "local"]
 
 
 class Alarm(BaseModel):

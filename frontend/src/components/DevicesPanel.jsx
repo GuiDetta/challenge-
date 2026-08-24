@@ -1,4 +1,5 @@
 import { Image, Plus, X } from "lucide-react";
+import { useState } from "react";
 
 const availableDevices = [
   {
@@ -10,6 +11,8 @@ const availableDevices = [
 ];
 
 function DevicesPanel({ onClose, onDeviceSelect }) {
+  const [selectedKind, setSelectedKind] = useState("simulated");
+
   return (
     <section className="side-panel devices-panel">
       <div className="devices-heading">
@@ -29,6 +32,22 @@ function DevicesPanel({ onClose, onDeviceSelect }) {
       <p className="devices-description">
         Selecione um aparelho para posicioná-lo no mapa.
       </p>
+      <div className="device-kind-selector" role="group" aria-label="Tipo do carregador">
+        <button
+          type="button"
+          className={selectedKind === "simulated" ? "is-selected" : ""}
+          onClick={() => setSelectedKind("simulated")}
+        >
+          Simulado
+        </button>
+        <button
+          type="button"
+          className={selectedKind === "real" ? "is-selected" : ""}
+          onClick={() => setSelectedKind("real")}
+        >
+          Real
+        </button>
+      </div>
       <div className="device-list">
         {availableDevices.map((device) => (
           <button
@@ -36,7 +55,7 @@ function DevicesPanel({ onClose, onDeviceSelect }) {
             type="button"
             key={device.id}
             onClick={() => {
-              onDeviceSelect(device);
+              onDeviceSelect({ ...device, kind: selectedKind });
               onClose();
             }}
           >
