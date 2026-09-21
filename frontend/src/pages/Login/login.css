@@ -1,0 +1,8 @@
+.monitoring-auth-page {
+  min-height: 100vh;
+}
+
+.monitoring-auth-card,
+.monitoring-auth-brand {
+  contain: layout;
+}

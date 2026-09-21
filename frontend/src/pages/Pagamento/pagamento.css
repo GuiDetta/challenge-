@@ -1,0 +1,8 @@
+.pagamento-page,
+.chargegrid-page {
+  min-height: 100vh;
+}
+
+.chargegrid-page .public-panel {
+  min-width: 0;
+}

@@ -1,0 +1,7 @@
+.reports-shell .report-panel {
+  min-width: 0;
+}
+
+.reports-shell .report-kpi strong {
+  text-wrap: balance;
+}

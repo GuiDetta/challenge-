@@ -1,0 +1,42 @@
+.chargers-page .charger-grid {
+  min-width: 0;
+  align-items: start;
+}
+
+.chargers-page .charger-card {
+  align-self: start;
+  min-height: 0;
+  gap: 12px;
+}
+
+.chargers-page .charger-session-slot,
+.chargers-page .charger-session-slot.is-standby {
+  min-height: 104px;
+}
+
+.chargers-page .charger-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.chargers-page .charger-card-actions {
+  flex-wrap: wrap;
+}
+
+.chargers-page .charger-card-actions input {
+  min-width: 110px;
+  height: 26px;
+  border: 1px solid var(--line);
+  padding: 5px 7px;
+  color: var(--ink);
+  background: #171515;
+  font:
+    10px "DM Mono",
+    monospace;
+}
+
+.chargers-page .charger-card-actions .manage-payment-button {
+  margin-top: 0;
+}
