@@ -45,7 +45,7 @@ def _fault_for(seed_value: int, power_limit: float) -> tuple[int, str | None]:
 def snapshot_for(charger: dict, bucket: int | None = None) -> dict:
     now = datetime.now(timezone.utc)
     bucket = bucket or int(now.timestamp() // 1800)
-    power_limit = float(charger.get("power_kw") or 11)
+    power_limit = float(charger.get("power_kw") or 7)
     phase = charger.get("phase") or ("single" if power_limit == 7 else "three")
     voltage = 230.0 if phase == "single" else 400.0
     kind = _charger_kind(charger)
@@ -128,22 +128,6 @@ def snapshot_for(charger: dict, bucket: int | None = None) -> dict:
         session_energy = 0.0
         total_energy = round(12 + (seed % 120) + power_limit * 1.1, 1)
         temperature = round(23 + power_limit * 0.5 + (seed % 6) * 0.8, 1)
-        connection_status = "disconnected"
-        fault_code = 0
-        alarm_code = 0
-
-    if kind == "real" and not payment_active:
-        power = 0.0
-        current = 0.0
-        session_energy = 0.0
-        total_energy = 0.0
-        temperature = 0.0
-    else:
-        power = 0.0
-        current = 0.0
-        session_energy = 0.0
-        total_energy = round(12 + (seed % 110) + power_limit, 1)
-        temperature = round(25 + power_limit * 0.7 + (seed % 10), 1)
         connection_status = "disconnected"
         fault_code = 0
         alarm_code = 0

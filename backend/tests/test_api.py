@@ -1,4 +1,5 @@
 from io import BytesIO
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
@@ -29,6 +30,85 @@ def test_upload_and_add_device() -> None:
     device_response = client.post(f"/api/plans/{plan['plan_id']}/devices", json={"name": "Entrada", "x": 40, "y": 30})
     assert device_response.status_code == 201
     assert device_response.json()["plan_id"] == plan["plan_id"]
+
+
+def test_plans_are_isolated_by_owner() -> None:
+    image = Image.new("RGB", (120, 100), "white")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    response = client.post(
+        "/api/plans",
+        files={"file": ("private-plan.png", buffer.getvalue(), "image/png")},
+        headers={"X-User-Id": "owner-a"},
+    )
+    assert response.status_code == 201
+    plan_id = response.json()["plan_id"]
+
+    assert client.get(f"/api/plans/{plan_id}?owner_id=owner-a").status_code == 200
+    assert client.get(f"/api/plans/{plan_id}?owner_id=owner-b").status_code == 404
+    assert client.get("/api/plans?owner_id=owner-b").json() == []
+
+
+def test_charging_order_requires_and_debits_wallet_balance() -> None:
+    email = f"wallet-{uuid4().hex}@example.com"
+    user = client.post(
+        "/api/auth/register",
+        json={"name": "Wallet User", "email": email, "password": "secret123", "role": "cliente"},
+    ).json()
+    image = Image.new("RGB", (160, 120), "white")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    plan = client.post(
+        "/api/plans",
+        files={"file": ("wallet-plan.png", buffer.getvalue(), "image/png")},
+        headers={"X-User-Id": user["id"]},
+    ).json()
+    charger = client.post(
+        f"/api/plans/{plan['plan_id']}/chargers",
+        json={"name": "Wallet Charger", "x": 30, "y": 40, "kind": "real"},
+        headers={"X-User-Id": user["id"]},
+    ).json()
+    order = {"user_id": user["id"], "charger_code": charger["code"], "energy_kwh": 10, "payment_method": "wallet"}
+
+    assert client.post("/api/charging-orders", json=order).status_code == 402
+    assert client.post(f"/api/wallet/top-ups", json={"user_id": user["id"], "amount": 25}).status_code == 201
+    assert client.post("/api/charging-orders", json=order).status_code == 201
+    assert client.post("/api/charging-orders", json=order).status_code == 402
+
+
+def test_finishing_order_refunds_undelivered_energy() -> None:
+    email = f"refund-{uuid4().hex}@example.com"
+    user = client.post(
+        "/api/auth/register",
+        json={"name": "Refund User", "email": email, "password": "secret123", "role": "cliente"},
+    ).json()
+    image = Image.new("RGB", (160, 120), "white")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    plan = client.post(
+        "/api/plans",
+        files={"file": ("refund-plan.png", buffer.getvalue(), "image/png")},
+        headers={"X-User-Id": user["id"]},
+    ).json()
+    charger = client.post(
+        f"/api/plans/{plan['plan_id']}/chargers",
+        json={"name": "Refund Charger", "x": 30, "y": 40, "kind": "real"},
+        headers={"X-User-Id": user["id"]},
+    ).json()
+    order = {"user_id": user["id"], "charger_code": charger["code"], "energy_kwh": 10, "payment_method": "wallet"}
+    client.post("/api/wallet/top-ups", json={"user_id": user["id"], "amount": 25})
+    created = client.post("/api/charging-orders", json=order).json()
+
+    finished = client.post(
+        f"/api/charging-orders/{created['id']}/finish",
+        json={"user_id": user["id"], "energy_delivered_kwh": 5},
+    )
+    assert finished.status_code == 200
+    assert finished.json()["refund_amount"] == 9.95
+    assert finished.json()["wallet_balance"] == 15.05
+    public_status = client.get(f"/api/chargegrid/{charger['code']}")
+    assert public_status.status_code == 200
+    assert public_status.json()["status"] == "available"
 
 
 def test_charger_telemetry_and_history() -> None:
@@ -73,6 +153,40 @@ def test_public_chargegrid_works_without_active_session() -> None:
     assert response.status_code == 200
     assert response.json()["code"] == charger["code"]
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_active_real_charger_reports_connected_telemetry() -> None:
+    image = Image.new("RGB", (160, 120), "white")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    plan = client.post(
+        "/api/plans",
+        files={"file": ("active.png", buffer.getvalue(), "image/png")},
+        headers={"X-User-Id": "telemetry-owner"},
+    ).json()
+    charger = client.post(
+        f"/api/plans/{plan['plan_id']}/chargers",
+        json={"name": "Active HC2", "x": 30, "y": 40, "kind": "real"},
+        headers={"X-User-Id": "telemetry-owner"},
+    ).json()
+    user = client.post(
+        "/api/auth/register",
+        json={"name": "Telemetry User", "email": f"telemetry-{uuid4().hex}@example.com", "password": "secret123", "role": "cliente"},
+    ).json()
+    client.post("/api/wallet/top-ups", json={"user_id": user["id"], "amount": 100})
+    order = client.post("/api/charging-orders", json={"user_id": user["id"], "charger_code": charger["code"], "energy_kwh": 10, "payment_method": "wallet"}).json()
+
+    telemetry = client.get(f"/api/chargegrid/{charger['code']}").json()
+    assert telemetry["status"] == "charging"
+    assert telemetry["telemetry"]["connection_status"] == "connected"
+    assert telemetry["telemetry"]["power_kw"] > 0
+    assert telemetry["active_order_id"] is None
+
+    current_session = client.get(f"/api/chargegrid/{charger['code']}?user_id={user['id']}").json()
+    assert current_session["active_order_id"] == order["id"]
+
+    other_user_session = client.get(f"/api/chargegrid/{charger['code']}?user_id=another-user").json()
+    assert other_user_session["active_order_id"] is None
 
 
 def test_charger_code_is_unique_and_required_for_real_delete() -> None:

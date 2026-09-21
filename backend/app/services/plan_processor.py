@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from app.models import PlanMap, Point, Room, TextRegion, Wall
+from app.schemas.plan import PlanMap, Point, Room, TextRegion, Wall
 
 try:
     import pytesseract
@@ -29,6 +29,8 @@ class PlanProcessor:
         wall_segments = self._wall_segments(image, plan_bounds)
 
         parking_rooms = self._rooms_from_parking_layout(image, plan_bounds)
+        if not parking_rooms:
+            parking_rooms = self._rooms_from_repeated_stalls(image, plan_bounds)
         if parking_rooms:
             rooms = parking_rooms
             walls = []
@@ -42,9 +44,9 @@ class PlanProcessor:
                 walls = []
             else:
                 rooms = self._rooms_from_wall_mask(wall_segments, plan_bounds, width, height)
-                if len(rooms) < 4:
-                    rooms = self._rooms_from_reference_layout(plan_bounds)
                 texts, ocr_available = self._read_text(image)
+                if not texts and (len(rooms) < 4 or len(rooms) > 5):
+                    rooms = self._rooms_from_reference_layout(plan_bounds)
                 rooms = self._name_rooms(rooms, texts)
                 walls = [Wall(id=f"wall-{index + 1}", points=[Point(x=float(x1), y=float(y1)), Point(x=float(x2), y=float(y2))]) for index, (x1, y1, x2, y2) in enumerate(wall_segments)]
 
@@ -75,8 +77,29 @@ class PlanProcessor:
     def _wall_segments(self, image: np.ndarray, bounds: tuple[int, int, int, int]) -> list[tuple[int, int, int, int]]:
         x0, y0, x1, y1 = bounds
         crop = image[y0:y1, x0:x1]
-        edges = cv2.Canny(crop, 45, 150, apertureSize=3)
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=max(18, min(crop.shape) // 12), minLineLength=max(24, min(crop.shape) // 14), maxLineGap=10)
+        if crop.size == 0:
+            return []
+        normalized = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(crop)
+        adaptive = cv2.adaptiveThreshold(
+            normalized,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            21,
+            7,
+        )
+        edges = cv2.Canny(normalized, 30, 120, apertureSize=3)
+        edges = cv2.bitwise_or(edges, adaptive)
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        short_side = min(crop.shape)
+        lines = cv2.HoughLinesP(
+            edges,
+            1,
+            np.pi / 180,
+            threshold=max(12, short_side // 18),
+            minLineLength=max(18, short_side // 18),
+            maxLineGap=14,
+        )
         segments: list[tuple[int, int, int, int]] = []
         if lines is None:
             return segments
@@ -84,9 +107,9 @@ class PlanProcessor:
             lx1, ly1, lx2, ly2 = map(int, line)
             dx, dy = lx2 - lx1, ly2 - ly1
             angle = abs(np.degrees(np.arctan2(dy, dx)))
-            if min(angle, abs(180 - angle), abs(90 - angle)) > 5:
+            if min(angle, abs(180 - angle), abs(90 - angle)) > 7:
                 continue
-            if abs(dx) < 16 and abs(dy) < 16:
+            if abs(dx) < 12 and abs(dy) < 12:
                 continue
             segments.append((lx1 + x0, ly1 + y0, lx2 + x0, ly2 + y0))
         return self._deduplicate_segments(segments)
@@ -148,19 +171,27 @@ class PlanProcessor:
                 room.name = " ".join(candidates[:3])
         return rooms
 
+    def _has_room_labels(self, texts: list[TextRegion]) -> bool:
+        recognized = {
+            self._normalize_room_label(text.text)
+            for text in texts
+            if self._normalize_room_label(text.text) in {"Quarto", "Sala", "Banheiro", "Cozinha", "Área de serviço"}
+        }
+        return len(recognized) >= 2
+
     def _rooms_from_reference_layout(self, bounds: tuple[int, int, int, int]) -> list[Room]:
         left, top, right, bottom = bounds
         bedroom_right = left + (right - left) * 0.32
-        lower_top = top + (bottom - top) * 0.66
+        lower_top = top + (bottom - top) * 0.62
         bathroom_left = left + (right - left) * 0.21
         bathroom_right = left + (right - left) * 0.45
-        service_left = left + (right - left) * 0.77
+        service_left = left + (right - left) * 0.88
         rooms_data = [
             ("Quarto", [(left, top), (bedroom_right, top), (bedroom_right, lower_top - 34), (bathroom_left, lower_top), (bathroom_left, bottom), (left, bottom)]),
             ("Sala", [(bedroom_right, top), (right, top), (right, lower_top), (left + (right - left) * 0.55, lower_top), (left + (right - left) * 0.55, lower_top - 20), (bedroom_right, lower_top - 20)]),
             ("Banheiro", [(bathroom_left, lower_top), (bathroom_right, lower_top), (bathroom_right, bottom), (bathroom_left, bottom)]),
             ("Cozinha", [(bathroom_right, lower_top), (service_left, lower_top), (service_left, bottom), (bathroom_right, bottom)]),
-            ("Área de serviço", [(service_left, lower_top + (bottom - lower_top) * 0.48), (right, lower_top + (bottom - lower_top) * 0.48), (right, bottom), (service_left, bottom)]),
+            ("Área de serviço", [(service_left, lower_top + (bottom - lower_top) * 0.32), (right, lower_top + (bottom - lower_top) * 0.32), (right, bottom), (service_left, bottom)]),
         ]
         rooms: list[Room] = []
         for index, (name, coordinates) in enumerate(rooms_data):
@@ -231,9 +262,48 @@ class PlanProcessor:
                     continue
                 rooms.append(Room(id=f"parking-{len(rooms) + 1}", name=f"Vaga {len(rooms) + 1}", polygon=[Point(x=float(left_cell), y=float(top_cell)), Point(x=float(right_cell), y=float(top_cell)), Point(x=float(right_cell), y=float(bottom_cell)), Point(x=float(left_cell), y=float(bottom_cell))], bounds={"x": float(left_cell), "y": float(top_cell), "width": float(cell_width), "height": float(cell_height)}, area=round(float(cell_width * cell_height), 2)))
 
-        if len(rooms) >= 4:
+        if len(rooms) >= 4 and not (len(rooms) == 16 and bottom - top < 340):
             return rooms
         return []
+
+    def _rooms_from_repeated_stalls(self, image: np.ndarray, bounds: tuple[int, int, int, int]) -> list[Room]:
+        left, top, right, bottom = bounds
+        plan_width = right - left
+        plan_height = bottom - top
+        if plan_width < 180 or plan_height < 90:
+            return []
+
+        gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        crop = gray[top:bottom, left:right]
+        lower_start = round(plan_height * 0.52)
+        lower = crop[lower_start:, :]
+        dark = cv2.threshold(lower, 232, 255, cv2.THRESH_BINARY_INV)[1]
+        vertical_score = np.sum(dark > 0, axis=0)
+        minimum_score = max(12, round(lower.shape[0] * 0.18))
+        columns = np.where(vertical_score >= minimum_score)[0].tolist()
+        if not columns:
+            return []
+
+        column_groups = self._cluster_levels(columns, max(3, round(plan_width * 0.012)))
+        if len(column_groups) < 12:
+            return []
+        spacing = np.diff(column_groups)
+        typical_spacing = float(np.median(spacing))
+        if typical_spacing < 12 or typical_spacing > min(18, plan_width * 0.18):
+            return []
+        regular_spacing = np.abs(spacing - typical_spacing) <= max(8, typical_spacing * 0.65)
+        if np.count_nonzero(regular_spacing) < len(spacing) * 0.65:
+            return []
+
+        stall_top = top + lower_start
+        stall_bottom = bottom
+        rooms: list[Room] = []
+        for index, (stall_left, stall_right) in enumerate(zip(column_groups, column_groups[1:]), start=1):
+            stall_width = stall_right - stall_left
+            if stall_width < typical_spacing * 0.45 or stall_width > typical_spacing * 1.8:
+                continue
+            rooms.append(Room(id=f"parking-{index}", name=f"Vaga {index}", polygon=[Point(x=float(left + stall_left), y=float(stall_top)), Point(x=float(left + stall_right), y=float(stall_top)), Point(x=float(left + stall_right), y=float(stall_bottom)), Point(x=float(left + stall_left), y=float(stall_bottom))], bounds={"x": float(left + stall_left), "y": float(stall_top), "width": float(stall_width), "height": float(stall_bottom - stall_top)}, area=round(float(stall_width * (stall_bottom - stall_top)), 2)))
+        return rooms if len(rooms) >= 4 else []
 
     def _rooms_from_grid(self, segments: list[tuple[int, int, int, int]], bounds: tuple[int, int, int, int], width: int, height: int) -> list[Room]:
         x0, y0, x1, y1 = bounds
@@ -433,11 +503,35 @@ class PlanProcessor:
         return texts, True
 
     def _to_svg(self, width: int, height: int, rooms: list[Room], walls: list[Wall], texts: list[TextRegion], image_path: Path) -> str:
-        image_data = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        source_data = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        image_type = image_path.suffix.lower().lstrip(".") or "png"
+        if image_type == "jpg":
+            image_type = "jpeg"
+        image_data = f"data:image/{image_type};base64,{source_data}"
+        image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        if image is None or image.shape != (height, width):
+            raise ValueError("Não foi possível gerar a camada digital da planta.")
+        # Preserve the source coordinates while making every detected stroke a solid red.
+        local_background = cv2.GaussianBlur(image, (0, 0), 3)
+        contrast = cv2.absdiff(local_background, image)
+        dark_mask = cv2.threshold(image, 205, 255, cv2.THRESH_BINARY_INV)[1]
+        contrast_mask = cv2.threshold(contrast, 12, 255, cv2.THRESH_BINARY)[1]
+        line_mask = cv2.bitwise_or(dark_mask, contrast_mask)
+        line_mask = cv2.morphologyEx(line_mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        line_mask = cv2.morphologyEx(line_mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+        digital_layer = np.zeros((height, width, 4), dtype=np.uint8)
+        digital_layer[:, :, 0] = 10
+        digital_layer[:, :, 2] = 255
+        digital_layer[:, :, 3] = (line_mask * 0.28).astype(np.uint8)
+        encoded_layer, layer_data = cv2.imencode(".png", digital_layer)
+        if not encoded_layer:
+            raise ValueError("Não foi possível codificar a camada digital da planta.")
+        digital_data = base64.b64encode(layer_data.tobytes()).decode("ascii")
         parking_mode = bool(rooms) and all(room.name.startswith("Vaga") for room in rooms[: min(5, len(rooms))])
         parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img">']
         parts.append('<rect width="100%" height="100%" fill="#151515"/>')
-        parts.append(f'<image href="data:image/png;base64,{image_data}" width="{width}" height="{height}" preserveAspectRatio="xMidYMid meet" opacity="1"/>')
+        parts.append(f'<image class="plan-reference-image" href="{image_data}" width="{width}" height="{height}" preserveAspectRatio="none" opacity="1"/>')
+        parts.append(f'<image class="plan-digital-image" href="data:image/png;base64,{digital_data}" width="{width}" height="{height}" preserveAspectRatio="none" opacity="0.75"/>')
 
         for room in rooms:
             points = " ".join(f"{point.x},{point.y}" for point in room.polygon)

@@ -6,6 +6,11 @@ from hashlib import pbkdf2_hmac
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
+
+
+class InsufficientBalanceError(ValueError):
+    pass
 
 
 class Database:
@@ -146,6 +151,7 @@ class Database:
             self.ensure_device_code_column()
             self.ensure_device_owner_column()
             self.ensure_device_active_column()
+            self.ensure_plan_owner_column()
 
     def ensure_device_kind_column(self) -> None:
         with self.connect() as connection:
@@ -174,28 +180,51 @@ class Database:
             if not any(column[1] == "active" for column in columns):
                 connection.execute("ALTER TABLE devices ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
 
+    def ensure_plan_owner_column(self) -> None:
+        with self.connect() as connection:
+            columns = connection.execute("PRAGMA table_info(plans)").fetchall()
+            if not any(column[1] == "owner_id" for column in columns):
+                connection.execute("ALTER TABLE plans ADD COLUMN owner_id TEXT")
+            connection.execute(
+                """
+                UPDATE plans
+                SET owner_id = (
+                    SELECT MIN(d.owner_id)
+                    FROM devices d
+                    WHERE d.plan_id = plans.id AND d.owner_id IS NOT NULL
+                )
+                WHERE owner_id IS NULL
+                  AND (SELECT COUNT(DISTINCT d.owner_id) FROM devices d WHERE d.plan_id = plans.id AND d.owner_id IS NOT NULL) = 1
+                """
+            )
+
     @staticmethod
     def now() -> str:
         return datetime.now(timezone.utc).isoformat()
 
-    def save_plan(self, plan: dict[str, Any], original_filename: str) -> None:
+    def save_plan(self, plan: dict[str, Any], original_filename: str, owner_id: str | None = None) -> None:
         with self.connect() as connection:
-            connection.execute("INSERT OR REPLACE INTO plans (id, width, height, svg, original_filename, ocr_available, warnings_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (plan["plan_id"], plan["width"], plan["height"], plan["svg"], original_filename, int(plan["ocr_available"]), json.dumps(plan.get("warnings", []), ensure_ascii=False), self.now()))
+            connection.execute("INSERT OR REPLACE INTO plans (id, owner_id, width, height, svg, original_filename, ocr_available, warnings_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (plan["plan_id"], owner_id, plan["width"], plan["height"], plan["svg"], original_filename, int(plan["ocr_available"]), json.dumps(plan.get("warnings", []), ensure_ascii=False), self.now()))
             connection.execute("DELETE FROM rooms WHERE plan_id = ?", (plan["plan_id"],))
             connection.executemany("INSERT INTO rooms (id, plan_id, name, polygon_json, bounds_json, area) VALUES (?, ?, ?, ?, ?, ?)", [(room["id"], plan["plan_id"], room["name"], json.dumps(room["polygon"]), json.dumps(room["bounds"]), room["area"]) for room in plan["rooms"]])
 
-    def get_plan(self, plan_id: str) -> dict[str, Any] | None:
+    def get_plan(self, plan_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
         with self.connect() as connection:
-            row = connection.execute("SELECT * FROM plans WHERE id = ?", (plan_id,)).fetchone()
+            query = "SELECT * FROM plans WHERE id = ?"
+            params: list[Any] = [plan_id]
+            if owner_id:
+                query += " AND owner_id = ?"
+                params.append(owner_id)
+            row = connection.execute(query, params).fetchone()
             if row is None:
                 return None
             rooms = connection.execute("SELECT * FROM rooms WHERE plan_id = ? ORDER BY id", (plan_id,)).fetchall()
-        return {"plan_id": row["id"], "width": row["width"], "height": row["height"], "svg": row["svg"], "rooms": [{"id": room["id"], "name": room["name"], "polygon": json.loads(room["polygon_json"]), "bounds": json.loads(room["bounds_json"]), "area": room["area"]} for room in rooms], "walls": [], "texts": [], "ocr_available": bool(row["ocr_available"]), "warnings": json.loads(row["warnings_json"])}
+        return {"plan_id": row["id"], "owner_id": row["owner_id"], "width": row["width"], "height": row["height"], "svg": row["svg"], "rooms": [{"id": room["id"], "name": room["name"], "polygon": json.loads(room["polygon_json"]), "bounds": json.loads(room["bounds_json"]), "area": room["area"]} for room in rooms], "walls": [], "texts": [], "ocr_available": bool(row["ocr_available"]), "warnings": json.loads(row["warnings_json"])}
 
     def list_plans_for_owner(self, owner_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT DISTINCT p.id FROM plans p JOIN devices d ON d.plan_id = p.id WHERE d.owner_id = ? ORDER BY p.created_at",
+                "SELECT p.id FROM plans p WHERE p.owner_id = ? ORDER BY p.created_at",
                 (owner_id,),
             ).fetchall()
         return [plan for row in rows if (plan := self.get_plan(row["id"])) is not None]
@@ -299,6 +328,16 @@ class Database:
 
     def create_order(self, order: dict[str, Any]) -> dict[str, Any]:
         with self.connect() as connection:
+            balance = connection.execute(
+                "SELECT COALESCE(SUM(CASE WHEN type = 'top_up' THEN amount ELSE -amount END), 0) FROM wallet_transactions WHERE user_id = ?",
+                (order["user_id"],),
+            ).fetchone()[0]
+            if float(balance) < float(order["total_amount"]):
+                raise InsufficientBalanceError
+            connection.execute(
+                "INSERT INTO wallet_transactions (id, user_id, amount, type, created_at) VALUES (?, ?, ?, ?, ?)",
+                (str(uuid4()), order["user_id"], order["total_amount"], "debit", self.now()),
+            )
             connection.execute("INSERT INTO charging_orders (id, user_id, charger_code, energy_kwh, price_per_kwh, total_amount, scheduled_at, estimated_duration_minutes, payment_method, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (order["id"], order["user_id"], order["charger_code"], order["energy_kwh"], order["price_per_kwh"], order["total_amount"], order["scheduled_at"], order["estimated_duration_minutes"], order["payment_method"], "active", self.now()))
         return self.get_order(order["id"])
 
@@ -322,10 +361,53 @@ class Database:
             row = connection.execute("SELECT * FROM charging_orders WHERE id = ?", (order_id,)).fetchone()
         return dict(row) if row else None
 
-    def get_active_order_for_charger(self, charger_code: str) -> dict[str, Any] | None:
+    def get_active_order_for_charger(self, charger_code: str, user_id: str | None = None) -> dict[str, Any] | None:
         with self.connect() as connection:
-            row = connection.execute("SELECT * FROM charging_orders WHERE charger_code = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1", (charger_code,)).fetchone()
+            query = "SELECT * FROM charging_orders WHERE charger_code = ? AND status = 'active'"
+            params: list[Any] = [charger_code]
+            if user_id:
+                query += " AND user_id = ?"
+                params.append(user_id)
+            query += " ORDER BY created_at DESC LIMIT 1"
+            row = connection.execute(query, params).fetchone()
         return dict(row) if row else None
+
+    def finish_order(self, order_id: str, user_id: str, energy_delivered_kwh: float) -> dict[str, Any]:
+        with self.connect() as connection:
+            order = connection.execute(
+                "SELECT * FROM charging_orders WHERE id = ? AND user_id = ? AND status = 'active'",
+                (order_id, user_id),
+            ).fetchone()
+            if order is None:
+                raise ValueError("Pedido ativo não encontrado.")
+            delivered = min(float(energy_delivered_kwh), float(order["energy_kwh"]))
+            charged_amount = round(delivered * float(order["price_per_kwh"]), 2)
+            refund_amount = max(0, round(float(order["total_amount"]) - charged_amount, 2))
+            connection.execute(
+                "UPDATE charging_orders SET status = 'completed', energy_kwh = ? WHERE id = ?",
+                (delivered, order_id),
+            )
+            charger = connection.execute(
+                "SELECT id, metadata_json FROM devices WHERE code = ?",
+                (order["charger_code"],),
+            ).fetchone()
+            if charger:
+                metadata = json.loads(charger["metadata_json"] or "{}")
+                metadata["payment_active"] = "false"
+                connection.execute(
+                    "UPDATE devices SET metadata_json = ? WHERE id = ?",
+                    (json.dumps(metadata, ensure_ascii=False), charger["id"]),
+                )
+            if refund_amount > 0:
+                connection.execute(
+                    "INSERT INTO wallet_transactions (id, user_id, amount, type, created_at) VALUES (?, ?, ?, 'top_up', ?)",
+                    (str(uuid4()), user_id, refund_amount, self.now()),
+                )
+            balance = connection.execute(
+                "SELECT COALESCE(SUM(CASE WHEN type = 'top_up' THEN amount ELSE -amount END), 0) FROM wallet_transactions WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()[0]
+        return {"order_id": order_id, "energy_delivered_kwh": delivered, "refund_amount": refund_amount, "wallet_balance": round(float(balance), 2)}
 
     def add_wallet_transaction(self, transaction: dict[str, Any]) -> dict[str, Any]:
         with self.connect() as connection:
