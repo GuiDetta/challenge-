@@ -1,17 +1,13 @@
-# Local dependencies and virtual environments
-node_modules/
+# Dependencies and virtual environments
 **/node_modules/
-.venv/
 **/.venv/
 
 # Generated Python and frontend files
-__pycache__/
 **/__pycache__/
-.pytest_cache/
 **/.pytest_cache/
-dist/
+**/.vite/
 **/dist/
-*.pyc
+*.py[cod]
 
 # Local configuration and runtime data
 .env
@@ -21,9 +17,9 @@ backend/data/*.sqlite3
 backend/data/*.sqlite3-*
 backend/data/plans/
 
-# Local editor files
-.vscode/*
-!.vscode/launch.json
-!.vscode/extensions.json
+# Logs, coverage and local editor files
+*.log
+coverage/
+**/.vscode/
 .idea/
 .DS_Store
