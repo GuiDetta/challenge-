@@ -30,12 +30,11 @@
   gap: 42px;
   background: rgba(17, 16, 16, 0.86);
 }
-.brand-mark {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 170px;
-  color: var(--red);
+.brand-logo {
+  display: block;
+  width: 128px;
+  max-width: 100%;
+  height: auto;
 }
 .account-bar {
   display: flex;
@@ -72,6 +71,103 @@
   color: var(--green);
   font-size: 22px;
 }
+.booking-account-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  background: rgba(25, 24, 23, 0.86);
+}
+.booking-profile,
+.booking-wallet {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.profile-avatar {
+  display: grid;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--red);
+  color: var(--red);
+  font:
+    600 15px "Barlow Condensed",
+    sans-serif;
+}
+.booking-profile div,
+.booking-wallet {
+  display: grid;
+  gap: 3px;
+}
+.booking-profile span,
+.booking-wallet > span {
+  color: var(--muted);
+  font:
+    9px "DM Mono",
+    monospace;
+  text-transform: uppercase;
+}
+.booking-profile strong {
+  color: var(--ink);
+  font:
+    600 16px "Barlow Condensed",
+    sans-serif;
+  text-transform: uppercase;
+}
+.booking-profile small {
+  overflow: hidden;
+  max-width: 190px;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.booking-wallet {
+  justify-items: end;
+  padding-left: 16px;
+  border-left: 1px solid var(--line-soft);
+}
+.booking-wallet strong {
+  color: var(--green);
+  font:
+    600 21px "Barlow Condensed",
+    sans-serif;
+}
+.add-credit-button {
+  border: 1px solid var(--red);
+  padding: 6px 8px;
+  color: var(--ink);
+  background: rgba(255, 0, 10, 0.14);
+  font:
+    9px "DM Mono",
+    monospace;
+  text-transform: uppercase;
+}
+.booking-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.booking-tabs button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: transparent;
+  font:
+    9px "DM Mono",
+    monospace;
+  text-transform: uppercase;
+}
+.booking-tabs button.active {
+  border-color: var(--red);
+  color: var(--ink);
+  background: rgba(255, 0, 10, 0.13);
+}
 .calculated-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -89,33 +185,6 @@
   font:
     600 16px "Barlow Condensed",
     sans-serif;
-}
-.brand-symbol {
-  width: 31px;
-  height: 31px;
-  border: 2px solid var(--red);
-  display: grid;
-  place-items: center;
-  transform: rotate(-12deg);
-}
-.brand-symbol svg {
-  transform: rotate(12deg);
-}
-.brand-copy {
-  display: flex;
-  flex-direction: column;
-  line-height: 1;
-}
-.brand-copy strong {
-  font-family: "Barlow Condensed", sans-serif;
-  letter-spacing: 1px;
-  font-size: 21px;
-}
-.brand-copy small {
-  color: #bcaaa5;
-  font-size: 7px;
-  letter-spacing: 1.9px;
-  margin-top: 3px;
 }
 .top-nav nav {
   display: flex;
@@ -1460,8 +1529,8 @@
     flex-wrap: wrap;
     gap: 12px 20px;
   }
-  .brand-mark {
-    min-width: 150px;
+  .brand-logo {
+    width: 128px;
   }
   .top-nav nav {
     order: 3;
@@ -1651,6 +1720,21 @@
 .charger-grid.has-many {
   max-height: calc(100vh - 220px);
   overflow-y: auto;
+  scrollbar-color: var(--red) var(--surface-soft);
+  scrollbar-width: thin;
+}
+.assistant-body::-webkit-scrollbar {
+  width: 8px;
+}
+.assistant-body::-webkit-scrollbar-track {
+  background: var(--surface-soft);
+}
+.assistant-body::-webkit-scrollbar-thumb {
+  border: 2px solid var(--surface-soft);
+  background: var(--red);
+}
+.assistant-body::-webkit-scrollbar-thumb:hover {
+  background: #ff4d54;
 }
 
 .charger-card {
@@ -2145,10 +2229,16 @@
   color: var(--ink);
 }
 .public-header {
+  box-sizing: border-box;
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  padding: 22px max(20px, calc((100vw - 560px) / 2));
+  width: min(560px, calc(100% - 32px));
+  min-height: 68px;
+  margin: 0 auto;
+  padding: 22px 20px;
+  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   color: var(--muted);
   font:
@@ -2162,24 +2252,30 @@
   font-weight: 600;
 }
 .public-content {
+  box-sizing: border-box;
   width: min(560px, calc(100% - 32px));
+  min-height: calc(100vh - 68px);
   margin: 0 auto;
-  padding: 54px 0 40px;
+  padding: 28px 20px 40px;
+  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  background: rgba(17, 16, 16, 0.28);
+  box-shadow: 0 0 42px rgba(0, 0, 0, 0.22);
 }
 .station-hero {
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
 .station-hero h1 {
   margin: 0;
   color: #f4f1ef;
   font:
-    600 clamp(42px, 10vw, 72px)/0.9 "Barlow Condensed",
+    600 clamp(38px, 8vw, 60px)/0.9 "Barlow Condensed",
     sans-serif;
   letter-spacing: 1px;
   text-transform: uppercase;
 }
 .station-hero p {
-  margin: 14px 0 0;
+  margin: 10px 0 0;
   color: var(--muted);
   font-size: 13px;
 }
@@ -2287,6 +2383,93 @@
     monospace;
   text-transform: uppercase;
 }
+.charge-management {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: rgba(17, 16, 16, 0.45);
+}
+.charge-management-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+.charge-management-heading > div {
+  display: grid;
+  gap: 5px;
+}
+.charge-management-heading strong {
+  color: var(--ink);
+  font:
+    600 19px "Barlow Condensed",
+    sans-serif;
+  text-transform: uppercase;
+}
+.charge-live,
+.charge-paused {
+  font:
+    10px "DM Mono",
+    monospace;
+  text-transform: uppercase;
+}
+.charge-live {
+  color: var(--green);
+}
+.charge-paused {
+  color: var(--amber);
+}
+.charge-target-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr) minmax(106px, 1.4fr);
+  gap: 7px;
+}
+.charge-target-options > button,
+.charge-pause-button {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: transparent;
+  font:
+    10px "DM Mono",
+    monospace;
+}
+.charge-target-options > button.selected {
+  border-color: var(--red);
+  color: var(--red);
+  background: rgba(255, 0, 10, 0.12);
+}
+.charge-target-input {
+  display: flex !important;
+  align-items: center;
+  gap: 5px !important;
+  min-width: 0;
+  border: 1px solid var(--line);
+  padding: 0 8px;
+}
+.charge-target-input span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.charge-target-input input {
+  min-height: 30px !important;
+  width: 42px !important;
+  border: 0 !important;
+  padding: 4px !important;
+  text-align: right;
+}
+.charge-target-input b {
+  color: var(--ink);
+  font: 10px "DM Mono", monospace;
+}
+.charge-pause-button {
+  border-color: rgba(242, 195, 66, 0.55);
+  color: var(--amber);
+}
 .form-two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2309,8 +2492,7 @@
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
-.payment-options button,
-.wallet-options button {
+.payment-options button {
   min-height: 40px;
   border: 1px solid var(--line);
   background: transparent;
@@ -2323,24 +2505,253 @@
   border-color: var(--red);
   background: rgba(255, 0, 10, 0.14);
 }
-.wallet-options {
-  display: grid;
-  grid-template-columns: auto repeat(4, 1fr);
-  gap: 7px;
-  align-items: center;
+.public-error {
+  color: #ff8c8f !important;
 }
-.wallet-options span {
+.public-success {
+  color: var(--green) !important;
+}
+.simulated-credit-tools {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 5;
+  display: grid;
+  gap: 7px;
+  width: min(300px, calc(100% - 40px));
+  padding: 14px;
+  border: 1px dashed rgba(242, 195, 66, 0.65);
+  background: rgba(25, 24, 23, 0.96);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+.simulated-credit-tools > span {
+  color: var(--amber);
+  font:
+    9px "DM Mono",
+    monospace;
+  text-transform: uppercase;
+}
+.simulated-credit-tools strong {
+  color: var(--ink);
+  font:
+    600 19px "Barlow Condensed",
+    sans-serif;
+  text-transform: uppercase;
+}
+.simulated-credit-tools > div {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.simulated-credit-tools button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: transparent;
+  font:
+    9px "DM Mono",
+    monospace;
+}
+.payment-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.72);
+}
+.payment-confirm-modal {
+  display: grid;
+  gap: 14px;
+  width: min(420px, 100%);
+  padding: 24px;
+  border: 1px solid var(--red);
+  background: var(--surface);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.5);
+}
+.payment-confirm-modal h2 {
+  margin: 0;
+  color: var(--ink);
+  font:
+    600 30px/1 "Barlow Condensed",
+    sans-serif;
+  text-transform: uppercase;
+}
+.payment-confirm-modal p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.payment-confirm-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.public-content.booking-view-plan,
+.public-content.booking-view-account {
+  width: min(560px, calc(100% - 32px));
+  box-sizing: border-box;
+  padding-top: 18px;
+}
+.public-content.booking-view-plan {
+  height: calc(100vh - 68px);
+  min-height: 0;
+  overflow: hidden;
+}
+.public-content.booking-view-plan .station-hero,
+.public-content.booking-view-account .station-hero {
+  margin-bottom: 10px;
+}
+.public-content.booking-view-plan .station-hero h1,
+.public-content.booking-view-account .station-hero h1 {
+  font-size: clamp(34px, 7vw, 52px);
+}
+.public-content.booking-view-plan .station-hero p,
+.public-content.booking-view-account .station-hero p {
+  margin-top: 6px;
+  font-size: 11px;
+}
+.public-content.booking-view-plan .booking-tabs,
+.public-content.booking-view-account .booking-tabs {
+  margin-bottom: 8px;
+}
+.public-content.booking-view-plan .booking-tabs button,
+.public-content.booking-view-account .booking-tabs button {
+  min-height: 32px;
+}
+.public-content.booking-view-plan .booking-account-panel,
+.public-content.booking-view-account .booking-account-panel {
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 10px;
+}
+.public-content.booking-view-plan .profile-avatar,
+.public-content.booking-view-account .profile-avatar {
+  width: 26px;
+  height: 26px;
+}
+.public-content.booking-view-plan .booking-profile,
+.public-content.booking-view-plan .booking-wallet,
+.public-content.booking-view-account .booking-profile,
+.public-content.booking-view-account .booking-wallet {
+  gap: 7px;
+}
+.public-content.booking-view-plan .booking-profile strong,
+.public-content.booking-view-account .booking-profile strong {
+  font-size: 14px;
+}
+.public-content.booking-view-plan .booking-wallet strong,
+.public-content.booking-view-account .booking-wallet strong {
+  font-size: 18px;
+}
+.public-content.booking-view-plan .public-panel,
+.public-content.booking-view-account .public-panel {
+  padding: 14px;
+}
+.public-content.booking-view-plan .public-form,
+.public-content.booking-view-account .public-form {
+  gap: 10px;
+}
+.public-content.booking-view-plan .charge-management {
+  gap: 8px;
+  padding: 10px;
+}
+.public-content.booking-view-plan .charge-management-heading strong {
+  font-size: 17px;
+}
+.public-content.booking-view-plan .charge-target-options {
+  gap: 5px;
+}
+.public-content.booking-view-plan .charge-target-options > button,
+.public-content.booking-view-plan .charge-pause-button {
+  min-height: 34px;
+}
+.public-content.booking-view-plan .calculated-summary {
+  gap: 5px;
+  padding: 9px;
+}
+.public-content.booking-view-plan .calculated-summary div {
+  gap: 3px;
+}
+.public-content.booking-view-plan .calculated-summary strong {
+  font-size: 14px;
+}
+.public-content.booking-view-plan .public-form fieldset,
+.public-content.booking-view-account .public-form fieldset {
+  padding: 10px;
+}
+.public-content.booking-view-plan .payment-options button,
+.public-content.booking-view-account .payment-options button {
+  min-height: 34px;
+}
+.public-content.booking-view-plan .public-primary,
+.public-content.booking-view-account .public-primary {
+  min-height: 38px;
+  padding: 9px 12px;
+}
+.public-content.booking-view-account .account-edit-panel {
+  gap: 10px;
+}
+.public-content.booking-view-account .public-form input {
+  min-height: 36px;
+  padding: 7px 10px;
+}
+.monitor-panel,
+.account-edit-panel {
+  display: grid;
+  gap: 18px;
+}
+.monitor-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.monitor-heading h2 {
+  margin-top: 5px;
+}
+.monitor-progress {
+  display: grid;
+  gap: 10px;
+}
+.monitor-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.monitor-stats > div {
+  display: grid;
+  gap: 7px;
+  padding: 11px;
+  border: 1px solid var(--line-soft);
+}
+.monitor-stats span {
   color: var(--muted);
   font:
     9px "DM Mono",
     monospace;
   text-transform: uppercase;
 }
-.public-error {
-  color: #ff8c8f !important;
+.monitor-stats strong {
+  color: var(--ink);
+  font:
+    600 16px "Barlow Condensed",
+    sans-serif;
 }
-.public-success {
-  color: var(--green) !important;
+.end-charge-button {
+  min-height: 44px;
+  border: 1px solid var(--red);
+  color: var(--red);
+  background: rgba(255, 0, 10, 0.1);
+  font:
+    10px "DM Mono",
+    monospace;
+  text-transform: uppercase;
+}
+.end-charge-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 .reports-shell {
   gap: 18px;
@@ -2538,14 +2949,10 @@
 .monitoring-auth-brand {
   max-width: 620px;
 }
-.monitoring-auth-brand > span:not(.public-brand) {
+.auth-logo {
   display: block;
-  margin-top: 5px;
-  color: var(--muted);
-  font:
-    10px "DM Mono",
-    monospace;
-  letter-spacing: 2px;
+  width: min(220px, 100%);
+  height: auto;
 }
 .monitoring-auth-brand h1 {
   max-width: 560px;
@@ -2646,21 +3053,37 @@
   line-height: 1.5;
 }
 @media (max-width: 560px) {
-  .public-content {
-    padding-top: 38px;
+  .public-content.booking-view-plan {
+    width: min(560px, calc(100% - 32px));
+    min-height: 0;
+    padding: 14px 20px 18px;
+    overflow: hidden;
   }
-  .public-panel {
-    padding: 18px;
+  .booking-account-panel {
+    grid-template-columns: 1fr;
+  }
+  .booking-wallet {
+    justify-items: start;
+    padding-top: 12px;
+    padding-left: 0;
+    border-top: 1px solid var(--line-soft);
+    border-left: 0;
+  }
+  .charge-target-options {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .charge-target-input {
+    grid-column: 1 / -1;
+  }
+  .monitor-stats {
+    grid-template-columns: 1fr;
+  }
+  .public-content.booking-view-plan .public-panel {
+    padding: 12px;
   }
   .form-two-col,
   .payment-options {
     grid-template-columns: 1fr;
-  }
-  .wallet-options {
-    grid-template-columns: 1fr 1fr;
-  }
-  .wallet-options span {
-    grid-column: 1 / -1;
   }
 }
 @media (max-width: 900px) {
