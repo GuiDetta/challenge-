@@ -10,6 +10,14 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import {
+  createCharger,
+  deleteCharger,
+  fetchChargerTelemetry,
+  updateCharger,
+  uploadPlan,
+} from "../services/api";
+
 function ParkingMap({
   uploadedPlan,
   onPlanUploaded,
@@ -51,7 +59,6 @@ function ParkingMap({
   const markerRefs = useRef({});
   const fileInputRef = useRef(null);
   const [popupPosition, setPopupPosition] = useState(null);
-  const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
   const focusedRoom = uploadedPlan?.rooms.find(
     (room) => room.id === selectedRoomId,
   );
@@ -128,18 +135,8 @@ function ParkingMap({
     if (!file) return;
     setUploadState("uploading");
     setUploadError("");
-    const formData = new FormData();
-    formData.append("file", file);
     try {
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/api/plans`,
-        { method: "POST", body: formData },
-      );
-      const payload = await response.json();
-      if (!response.ok)
-        throw new Error(
-          payload.detail || "Não foi possível processar a planta.",
-        );
+      const payload = await uploadPlan(file, ownerId);
       onPlanUploaded(payload);
       setUploadState("success");
       setUploadNotice(
@@ -219,38 +216,25 @@ function ParkingMap({
           mapPoint.y <= candidate.bounds.y + candidate.bounds.height,
       );
       try {
-        const response = await fetch(
-          `${API_URL}/api/plans/${uploadedPlan.plan_id}/chargers`,
+        const created = await createCharger(
+          uploadedPlan.plan_id,
           {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-User-Id": ownerId || "",
-            },
-            body: JSON.stringify({
-              name: pendingDevice.name,
-              x: mapPoint.x,
-              y: mapPoint.y,
-              room_id:
-                room?.id || (selectedRoomId === "all" ? null : selectedRoomId),
-              model: "GW11K-HCA-20",
-              power_kw: 11,
-              phase: "three",
-              kind: pendingDevice.kind || "simulated",
-            }),
+            name: pendingDevice.name,
+            x: mapPoint.x,
+            y: mapPoint.y,
+            room_id:
+              room?.id || (selectedRoomId === "all" ? null : selectedRoomId),
+            model: "GW7K-HCA-20",
+            power_kw: 7,
+            phase: "three",
+            kind: pendingDevice.kind || "simulated",
           },
+          ownerId,
         );
-        const created = await response.json();
-        if (!response.ok)
-          throw new Error(
-            created.detail || "Não foi possível salvar o carregador.",
-          );
-        const telemetryResponse = await fetch(
-          `${API_URL}/api/plans/${uploadedPlan.plan_id}/chargers/${created.id}/telemetry`,
-        );
-        const telemetry = telemetryResponse.ok
-          ? await telemetryResponse.json()
-          : null;
+        const telemetry = await fetchChargerTelemetry(
+          uploadedPlan.plan_id,
+          created.id,
+        ).catch(() => null);
         onDevicePlaced({ ...created, telemetry });
         setUploadNotice(`${created.name} adicionado ao mapa.`);
         window.setTimeout(() => setUploadNotice(""), 2600);
@@ -339,23 +323,8 @@ function ParkingMap({
           room_id: room?.id || null,
         };
 
-        fetch(
-          `${API_URL}/api/plans/${uploadedPlan.plan_id}/chargers/${deviceId}`,
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          },
-        )
-          .then(async (response) => {
-            if (!response.ok) {
-              throw new Error(
-                "Não foi possível atualizar a posição do carregador.",
-              );
-            }
-            const updatedCharger = await response.json();
-            onChargerUpdate(updatedCharger);
-          })
+        updateCharger(uploadedPlan.plan_id, deviceId, payload, ownerId)
+          .then(onChargerUpdate)
           .catch(() => {
             setUploadNotice("Não foi possível mover o carregador no mapa.");
             window.setTimeout(() => setUploadNotice(""), 2600);
@@ -443,11 +412,14 @@ function ParkingMap({
 
     try {
       if (targetCharger.kind !== "real") {
-        const response = await fetch(
-          `${API_URL}/api/plans/${uploadedPlan.plan_id}/chargers/${targetCharger.id}`,
-          { method: "DELETE" },
-        );
-        if (!response.ok) {
+        try {
+          await deleteCharger(
+            uploadedPlan.plan_id,
+            targetCharger.id,
+            "",
+            ownerId,
+          );
+        } catch {
           setUploadNotice("Não foi possível excluir o carregador simulado.");
           window.setTimeout(() => setUploadNotice(""), 2600);
           return;
@@ -465,12 +437,14 @@ function ParkingMap({
         return;
       }
 
-      const deleteUrl = `${API_URL}/api/plans/${uploadedPlan.plan_id}/chargers/${targetCharger.id}?code=${encodeURIComponent(normalizedCode)}`;
-      const response = await fetch(deleteUrl, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
+      try {
+        await deleteCharger(
+          uploadedPlan.plan_id,
+          targetCharger.id,
+          normalizedCode,
+          ownerId,
+        );
+      } catch {
         setDeleteError(
           "Código inválido. Verifique o código exibido no carregador.",
         );
@@ -672,7 +646,7 @@ function ParkingMap({
                 };
               });
             }}
-            className={`digital-plan ${showReference && selectedRoomId === "all" ? "" : "digital-only"} ${selectedRoomId !== "all" ? "room-focused" : ""}`}
+            className={`digital-plan ${showReference ? "" : "digital-only"} ${selectedRoomId !== "all" ? "room-focused" : ""}`}
             style={{
               ...focusStyle,
               transform: `translate(${viewport.x}px, ${viewport.y}px) rotate(${viewport.rotation}deg) scale(${viewport.scale})`,
