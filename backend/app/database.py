@@ -138,6 +138,18 @@ class Database:
                     type TEXT NOT NULL CHECK (type IN ('top_up', 'debit')),
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS error_events (
+                    id TEXT PRIMARY KEY,
+                    reference TEXT NOT NULL,
+                    code TEXT NOT NULL,
+                    status_code INTEGER NOT NULL,
+                    method TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    owner_id TEXT,
+                    detail TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_error_events_time ON error_events(occurred_at);
                 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
                 CREATE INDEX IF NOT EXISTS idx_orders_user ON charging_orders(user_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_transactions(user_id, created_at);
@@ -448,6 +460,107 @@ class Database:
             rows = connection.execute(
                 "SELECT o.charger_code, o.energy_kwh, o.total_amount, o.payment_method, o.status, o.created_at FROM charging_orders o JOIN devices d ON d.code = o.charger_code WHERE d.owner_id = ? ORDER BY o.created_at DESC LIMIT 50",
                 (owner_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def save_error_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO error_events (id, reference, code, status_code, method, path, owner_id, detail, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (event["id"], event["reference"], event["code"], event["status_code"], event["method"], event["path"], event.get("owner_id"), event["detail"], event["occurred_at"]),
+            )
+        return event
+
+    def list_error_events(self, owner_id: str | None, since: str, limit: int = 200) -> list[dict[str, Any]]:
+        query = "SELECT * FROM error_events WHERE occurred_at >= ?"
+        params: list[Any] = [since]
+        if owner_id:
+            query += " AND owner_id = ?"
+            params.append(owner_id)
+        query += " ORDER BY occurred_at DESC LIMIT ?"
+        params.append(limit)
+        with self.connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def availability_rows(self, owner_id: str, since: str) -> list[dict[str, Any]]:
+        """Uma amostra por carregador por minuto, para o tempo de leitura da tela não pesar na conta."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT d.id AS charger_id, d.name, d.code, s.status, COUNT(*) AS samples
+                FROM (
+                    SELECT MIN(id) AS id
+                    FROM charger_snapshots
+                    WHERE recorded_at >= ?
+                    GROUP BY charger_id, substr(recorded_at, 1, 16)
+                ) minute_sample
+                JOIN charger_snapshots s ON s.id = minute_sample.id
+                JOIN devices d ON d.id = s.charger_id
+                WHERE d.owner_id = ? AND d.device_type = 'charger' AND d.active = 1
+                GROUP BY d.id, s.status
+                ORDER BY d.name
+                """,
+                (since, owner_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def fault_rows(self, owner_id: str, since: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            occurrences = connection.execute(
+                """
+                SELECT code, COUNT(*) AS occurrences, COUNT(DISTINCT charger_id) AS chargers, MAX(minute) AS last_seen
+                FROM (
+                    SELECT DISTINCT s.fault_code AS code, s.charger_id, substr(s.recorded_at, 1, 16) AS minute
+                    FROM charger_snapshots s
+                    JOIN devices d ON d.id = s.charger_id
+                    WHERE d.owner_id = ? AND s.fault_code != 0 AND s.recorded_at >= ?
+                )
+                GROUP BY code
+                ORDER BY occurrences DESC
+                """,
+                (owner_id, since),
+            ).fetchall()
+            active = connection.execute(
+                "SELECT a.code, COUNT(*) AS active_alarms FROM alarms a JOIN devices d ON d.id = a.charger_id WHERE d.owner_id = ? AND a.active = 1 GROUP BY a.code",
+                (owner_id,),
+            ).fetchall()
+        active_by_code = {row["code"]: row["active_alarms"] for row in active}
+        return [{**dict(row), "active_alarms": active_by_code.get(row["code"], 0)} for row in occurrences]
+
+    def demand_rows(self, owner_id: str, since: str) -> list[dict[str, Any]]:
+        """Potência simultânea por minuto: média por carregador no minuto, somada entre carregadores."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT minute, SUM(power_kw) AS power_kw
+                FROM (
+                    SELECT substr(s.recorded_at, 1, 16) AS minute, s.charger_id, AVG(s.power_kw) AS power_kw
+                    FROM charger_snapshots s
+                    JOIN devices d ON d.id = s.charger_id
+                    WHERE d.owner_id = ? AND s.recorded_at >= ?
+                    GROUP BY minute, s.charger_id
+                )
+                GROUP BY minute
+                ORDER BY minute
+                """,
+                (owner_id, since),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def installed_power_kw(self, owner_id: str) -> float:
+        with self.connect() as connection:
+            total = connection.execute(
+                "SELECT COALESCE(SUM(power_kw), 0) FROM devices WHERE owner_id = ? AND device_type = 'charger' AND active = 1",
+                (owner_id,),
+            ).fetchone()[0]
+        return round(float(total), 2)
+
+    def order_rows(self, owner_id: str, since: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT o.id, o.created_at, o.charger_code, o.energy_kwh, o.total_amount, o.status, o.payment_method, o.price_per_kwh, o.estimated_duration_minutes, d.name AS charger_name FROM charging_orders o JOIN devices d ON d.code = o.charger_code WHERE d.owner_id = ? AND o.created_at >= ? ORDER BY o.created_at",
+                (owner_id, since),
             ).fetchall()
         return [dict(row) for row in rows]
 

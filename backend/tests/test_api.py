@@ -111,6 +111,133 @@ def test_finishing_order_refunds_undelivered_energy() -> None:
     assert public_status.json()["status"] == "available"
 
 
+def test_operations_report_covers_availability_faults_occupancy_and_demand() -> None:
+    email = f"ops-{uuid4().hex}@example.com"
+    user = client.post(
+        "/api/auth/register",
+        json={"name": "Ops User", "email": email, "password": "secret123", "role": "lojista"},
+    ).json()
+    image = Image.new("RGB", (160, 120), "white")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    plan = client.post(
+        "/api/plans",
+        files={"file": ("ops-plan.png", buffer.getvalue(), "image/png")},
+        headers={"X-User-Id": user["id"]},
+    ).json()
+    client.post(
+        f"/api/plans/{plan['plan_id']}/chargers",
+        json={"name": "Ops Charger", "x": 30, "y": 40, "kind": "real", "power_kw": 22, "phase": "three"},
+        headers={"X-User-Id": user["id"]},
+    )
+    client.post(f"/api/plans/{plan['plan_id']}/simulation/tick")
+
+    response = client.get(f"/api/reports/operations?owner_id={user['id']}&days=7&contracted_kw=30")
+    assert response.status_code == 200
+    report = response.json()
+
+    assert report["days"] == 7
+    assert report["availability"]["samples"] >= 1
+    assert 0 <= report["availability"]["fleet_uptime_percent"] <= 100
+    assert report["demand"]["installed_kw"] == 22
+    assert report["demand"]["contracted_kw"] == 30
+    assert report["demand"]["peak_kw"] <= 22
+    assert len(report["occupancy"]["hours"]) == 24
+    for item in report["faults"]["items"]:
+        assert item["first_action"]
+        assert item["escalation"]
+
+
+def test_operations_report_is_isolated_by_owner() -> None:
+    response = client.get(f"/api/reports/operations?owner_id=owner-sem-dados-{uuid4().hex}")
+    assert response.status_code == 200
+    report = response.json()
+    assert report["availability"]["chargers"] == []
+    assert report["occupancy"]["total_sessions"] == 0
+    assert report["demand"]["installed_kw"] == 0
+
+
+def test_failed_request_is_logged_with_code_and_reference() -> None:
+    owner = f"dono-{uuid4().hex}"
+    response = client.post(
+        "/api/charging-orders",
+        json={"user_id": owner, "charger_code": "HC2-XXXXXX", "energy_kwh": 5, "payment_method": "wallet"},
+    )
+    assert response.status_code == 404
+    payload = response.json()
+    assert payload["code"] == "ECT-404"
+    assert len(payload["reference"]) == 6
+    assert payload["detail"]
+
+    events = client.get(f"/api/reports/errors?owner_id={owner}&days=1&limit=50").json()["events"]
+    assert any(event["reference"] == payload["reference"] for event in events)
+
+
+def test_error_log_does_not_leak_between_owners() -> None:
+    victim = f"vitima-{uuid4().hex}"
+    client.post(
+        "/api/charging-orders",
+        json={"user_id": victim, "charger_code": "HC2-SEGREDO", "energy_kwh": 5, "payment_method": "wallet"},
+    )
+    intruder = client.get(f"/api/reports/errors?owner_id=intruso-{uuid4().hex}&days=1&limit=100").json()["events"]
+    assert intruder == []
+
+    export = client.get(f"/api/reports/export/erros?owner_id=intruso-{uuid4().hex}&days=1")
+    assert export.status_code == 200
+    assert len(export.content.decode("utf-8-sig").splitlines()) == 1  # só o cabeçalho
+
+
+def test_validation_error_names_the_field() -> None:
+    response = client.get("/api/reports/operations")
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == "ECT-422"
+    assert "owner_id" in payload["detail"]
+
+
+def test_exports_return_downloadable_csv() -> None:
+    email = f"csv-{uuid4().hex}@example.com"
+    user = client.post(
+        "/api/auth/register",
+        json={"name": "CSV User", "email": email, "password": "secret123", "role": "lojista"},
+    ).json()
+    image = Image.new("RGB", (160, 120), "white")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    plan = client.post(
+        "/api/plans",
+        files={"file": ("csv-plan.png", buffer.getvalue(), "image/png")},
+        headers={"X-User-Id": user["id"]},
+    ).json()
+    charger = client.post(
+        f"/api/plans/{plan['plan_id']}/chargers",
+        json={"name": "CSV Charger", "x": 30, "y": 40, "kind": "real", "power_kw": 7},
+        headers={"X-User-Id": user["id"]},
+    ).json()
+    client.post("/api/wallet/top-ups", json={"user_id": user["id"], "amount": 100})
+    client.post(
+        "/api/charging-orders",
+        json={"user_id": user["id"], "charger_code": charger["code"], "energy_kwh": 3, "payment_method": "wallet"},
+    )
+
+    for report in ("financeiro", "disponibilidade", "falhas", "erros"):
+        response = client.get(f"/api/reports/export/{report}?owner_id={user['id']}&days=30")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/csv")
+        assert "attachment; filename=" in response.headers["content-disposition"]
+        assert response.content.startswith(b"\xef\xbb\xbf")  # BOM, para o Excel ler os acentos
+        assert ";" in response.content.decode("utf-8-sig").splitlines()[0]
+
+    financial = client.get(f"/api/reports/export/financeiro?owner_id={user['id']}&days=30")
+    lines = financial.content.decode("utf-8-sig").splitlines()
+    assert lines[0].startswith("Data;Hora;Carregador")
+    assert charger["code"] in lines[1]
+
+    assert client.get("/api/reports/export/inexistente?owner_id=x").status_code == 404
+    assert client.get("/api/reports/export/financeiro").status_code == 422
+    assert client.get("/api/reports/errors").status_code == 422
+
+
 def test_charger_telemetry_and_history() -> None:
     image = Image.new("RGB", (160, 120), "white")
     buffer = BytesIO()

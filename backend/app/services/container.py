@@ -4,6 +4,7 @@ from app.services.auth_service import AuthService
 from app.services.charger_service import ChargerService
 from app.services.order_service import OrderService
 from app.services.plan_service import PlanService
+from app.services.report_service import ReportService
 
 
 def get_plan_service() -> PlanService:
@@ -20,6 +21,10 @@ def get_auth_service() -> AuthService:
 
 def get_order_service() -> OrderService:
     return OrderService(get_database())
+
+
+def get_report_service() -> ReportService:
+    return ReportService(get_database())
 
 
 def get_assistant_service() -> AssistantService:

@@ -1,11 +1,15 @@
 export function getApiError(payload, fallback) {
-  if (typeof payload?.detail === "string") return payload.detail;
-  if (Array.isArray(payload?.detail)) {
-    return payload.detail
+  let message = fallback;
+  if (typeof payload?.detail === "string") message = payload.detail;
+  else if (Array.isArray(payload?.detail)) {
+    message = payload.detail
       .map((item) => item?.msg || "Dados inválidos.")
       .join(" ");
   }
-  return fallback;
+  // o código e a referência são o que o cliente informa ao suporte
+  if (payload?.code && payload?.reference)
+    return `${message} (${payload.code} · ref ${payload.reference})`;
+  return message;
 }
 
 export function formatCurrency(value) {

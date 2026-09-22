@@ -49,6 +49,48 @@ export function fetchReport(ownerId) {
   );
 }
 
+export function fetchOperationsReport(ownerId, days = 7, contractedKw) {
+  const contracted = contractedKw
+    ? `&contracted_kw=${encodeURIComponent(contractedKw)}`
+    : "";
+  return request(
+    `/api/reports/operations?owner_id=${encodeURIComponent(ownerId)}&days=${days}${contracted}`,
+  );
+}
+
+export function fetchErrorLog(ownerId, days = 7, limit = 20) {
+  return request(
+    `/api/reports/errors?owner_id=${encodeURIComponent(ownerId)}&days=${days}&limit=${limit}`,
+  );
+}
+
+function nameFromHeader(header, fallback) {
+  const match = /filename="?([^";]+)"?/.exec(header || "");
+  return match ? match[1] : fallback;
+}
+
+export async function downloadReport(report, ownerId, days = 30) {
+  const response = await fetch(
+    `${API_URL}/api/reports/export/${report}?owner_id=${encodeURIComponent(ownerId)}&days=${days}`,
+  );
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(getApiError(payload, "Não foi possível gerar o arquivo."));
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = nameFromHeader(
+    response.headers.get("Content-Disposition"),
+    `ecotwin-${report}.csv`,
+  );
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function fetchAssistantAlerts(ownerId) {
   return request(
     `/api/assistant/alerts?owner_id=${encodeURIComponent(ownerId)}`,

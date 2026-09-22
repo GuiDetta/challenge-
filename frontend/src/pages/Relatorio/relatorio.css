@@ -5,3 +5,361 @@
 .reports-shell .report-kpi strong {
   text-wrap: balance;
 }
+
+.operations-header {
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.export-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  background: rgba(25, 24, 23, 0.86);
+}
+.export-bar-label {
+  display: grid;
+  gap: 4px;
+}
+.export-bar-label small {
+  color: var(--muted);
+  font:
+    9px "DM Mono",
+    monospace;
+}
+.export-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.export-button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 13px;
+  border: 1px solid var(--line);
+  background: #111010;
+  color: #eee7e4;
+  cursor: pointer;
+  font:
+    10px "DM Mono",
+    monospace;
+  text-transform: uppercase;
+}
+.export-button:hover:not(:disabled) {
+  border-color: var(--green);
+  color: var(--green);
+}
+.export-button:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+.export-failure {
+  width: 100%;
+  margin: 0;
+  color: #ff8c8f;
+  font-size: 11px;
+}
+
+.reports-shell .reports-grid-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+.error-log {
+  display: grid;
+  gap: 8px;
+  padding-top: 18px;
+}
+.error-row {
+  display: grid;
+  grid-template-columns: 78px 82px minmax(0, 1fr);
+  grid-template-areas:
+    "code reference detail"
+    "code reference meta";
+  gap: 4px 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--red);
+  background: rgba(17, 16, 16, 0.6);
+}
+.error-code {
+  grid-area: code;
+}
+.error-reference {
+  grid-area: reference;
+}
+.error-detail {
+  grid-area: detail;
+}
+.error-route {
+  grid-area: meta;
+}
+.error-when {
+  grid-area: meta;
+  justify-self: end;
+}
+.error-code {
+  color: var(--red);
+  font:
+    10px "DM Mono",
+    monospace;
+}
+.error-reference,
+.error-route,
+.error-when {
+  color: var(--muted);
+  font:
+    9px "DM Mono",
+    monospace;
+}
+.error-route,
+.error-when {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.error-detail {
+  color: #eee7e4;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.tone-good {
+  color: var(--green);
+}
+.tone-warn {
+  color: var(--amber);
+}
+.tone-bad {
+  color: var(--red);
+}
+/* o seletor precisa do elemento porque `.bar-track i` do App.css vence uma classe sozinha */
+.bar-track i.tone-fill-good {
+  background: linear-gradient(90deg, #167c58, var(--green));
+}
+.bar-track i.tone-fill-warn {
+  background: linear-gradient(90deg, #8a6b12, var(--amber));
+}
+.bar-track i.tone-fill-bad {
+  background: linear-gradient(90deg, #7a0409, var(--red));
+}
+
+.panel-empty {
+  display: grid;
+  gap: 6px;
+  padding: 34px 0;
+  text-align: center;
+}
+.panel-empty p {
+  margin: 0;
+  color: #eee7e4;
+  font-size: 12px;
+}
+.panel-empty small {
+  color: var(--muted);
+  font:
+    9px "DM Mono",
+    monospace;
+}
+
+.fleet-uptime {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 18px 0 4px;
+}
+.fleet-uptime strong {
+  font:
+    600 34px "Barlow Condensed",
+    sans-serif;
+  letter-spacing: 0.7px;
+}
+.fleet-uptime span {
+  color: var(--muted);
+  font:
+    9px "DM Mono",
+    monospace;
+  text-transform: uppercase;
+}
+
+.demand-headline {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 18px 0 14px;
+}
+.demand-headline > div {
+  display: grid;
+  gap: 4px;
+}
+.demand-headline span,
+.demand-headline small {
+  color: var(--muted);
+  font:
+    9px "DM Mono",
+    monospace;
+  text-transform: uppercase;
+}
+.demand-headline strong {
+  color: #f4f1ef;
+  font:
+    600 28px "Barlow Condensed",
+    sans-serif;
+  letter-spacing: 0.7px;
+}
+.demand-track {
+  height: 12px;
+}
+.demand-chart {
+  height: 140px;
+  padding-top: 18px;
+}
+.demand-bar {
+  background: linear-gradient(180deg, var(--amber), #8a6b12);
+  border: 1px solid rgba(242, 195, 66, 0.5);
+}
+
+.occupancy-chart {
+  display: flex;
+  align-items: end;
+  gap: 3px;
+  height: 180px;
+  padding: 22px 0 0;
+  border-bottom: 1px solid var(--line);
+}
+.occupancy-column {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  flex-direction: column;
+  justify-content: end;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.occupancy-bar {
+  width: 100%;
+  min-height: 3px;
+  background: #3b302f;
+}
+.occupancy-peak {
+  background: linear-gradient(180deg, var(--green), #167c58);
+}
+.occupancy-column span {
+  color: var(--muted);
+  font:
+    8px "DM Mono",
+    monospace;
+}
+.occupancy-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding-top: 16px;
+}
+.occupancy-facts > div {
+  display: grid;
+  gap: 3px;
+}
+.occupancy-facts span,
+.occupancy-facts small {
+  color: var(--muted);
+  font:
+    9px "DM Mono",
+    monospace;
+  text-transform: uppercase;
+}
+.occupancy-facts strong {
+  color: #f4f1ef;
+  font:
+    600 22px "Barlow Condensed",
+    sans-serif;
+}
+
+.fault-list {
+  display: grid;
+  gap: 12px;
+  padding-top: 18px;
+}
+.fault-row {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  background: rgba(17, 16, 16, 0.6);
+}
+.fault-row.severity-critical {
+  border-left-color: var(--red);
+}
+.fault-row.severity-warning {
+  border-left-color: var(--amber);
+}
+.fault-row.severity-info {
+  border-left-color: var(--muted);
+}
+.fault-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.fault-head strong {
+  color: #f4f1ef;
+  font-size: 12px;
+}
+.fault-count {
+  color: var(--muted);
+  font:
+    9px "DM Mono",
+    monospace;
+  white-space: nowrap;
+}
+.fault-row p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.fault-origin {
+  color: var(--muted);
+}
+.fault-action {
+  color: #eee7e4;
+}
+.fault-escalation {
+  color: var(--amber);
+}
+.fault-active {
+  color: var(--red);
+  font:
+    9px "DM Mono",
+    monospace;
+  text-transform: uppercase;
+}
+
+@media (max-width: 1080px) {
+  .demand-headline,
+  .occupancy-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .error-row {
+    grid-template-columns: 78px minmax(0, 1fr);
+    grid-template-areas:
+      "code reference"
+      "detail detail"
+      "route route"
+      "when when";
+  }
+  .error-route {
+    grid-area: route;
+    white-space: normal;
+    word-break: break-all;
+  }
+  .error-when {
+    grid-area: when;
+  }
+}
