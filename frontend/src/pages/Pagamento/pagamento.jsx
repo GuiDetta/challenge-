@@ -1,217 +1,255 @@
-import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { Navigate, NavLink, Outlet, useParams } from "react-router-dom";
+import { History, LogOut, ReceiptText, Wallet, Zap } from "lucide-react";
 
-import { MOCK_VEHICLE_BATTERY_KWH } from "../../config";
-import {
-  authUser,
-  createChargingOrder,
-  fetchPublicCharger,
-  finishChargingOrder,
-  topUpWallet,
-} from "../../services/api";
-import { formatCurrency, formatDateTime } from "../../utils/formatters";
+import { DRIVER_STORAGE_KEY } from "../../config";
+import { useStoredUser } from "../../hooks/useStoredUser";
+import { authUser, fetchPublicCharger, fetchWallet } from "../../services/api";
+import { formatCurrency } from "../../utils/formatters";
 import "./pagamento.css";
+
+const CHARGER_REFRESH_MS = 5000;
+
+const TABS = [
+  { to: "", label: "Recarga", icon: Zap, end: true },
+  { to: "carteira", label: "Carteira", icon: Wallet },
+  { to: "extrato", label: "Extrato", icon: ReceiptText },
+  { to: "historico", label: "Histórico", icon: History },
+];
+
+export function BackToStation() {
+  const { chargerCode } = useParams();
+  return <Navigate to={`/pagamentos/${chargerCode}`} replace />;
+}
 
 export default function Pagamento() {
   const { chargerCode } = useParams();
+  const [user, setUser] = useStoredUser(DRIVER_STORAGE_KEY);
   const [charger, setCharger] = useState(null);
-  const [user, setUser] = useState(null);
-  const [mode, setMode] = useState("landing");
-  const [form, setForm] = useState({ name: "", email: "", password: "" });
-  const [target, setTarget] = useState(20);
-  const [balance, setBalance] = useState(0);
-  const [message, setMessage] = useState("");
-  const [order, setOrder] = useState(null);
+  const [balance, setBalance] = useState(null);
+  const [loadError, setLoadError] = useState("");
 
-  useEffect(() => {
-    fetchPublicCharger(chargerCode, user?.id)
-      .then(setCharger)
-      .catch((error) => setMessage(error.message));
-  }, [chargerCode, user?.id]);
-  const energy = (target / 100) * MOCK_VEHICLE_BATTERY_KWH;
-  const price =
-    new Date().getHours() >= 18 && new Date().getHours() < 22 ? 2.79 : 1.99;
-  const duration = Math.max(
-    1,
-    Math.round((energy / Number(charger?.power_kw || 7)) * 60),
+  const refreshCharger = useCallback(
+    () =>
+      fetchPublicCharger(chargerCode, user?.id)
+        .then((next) => {
+          setCharger(next);
+          setLoadError("");
+          return next;
+        })
+        .catch((error) => setLoadError(error.message)),
+    [chargerCode, user?.id],
   );
 
-  async function authenticate(event) {
-    event.preventDefault();
-    try {
-      const payload = await authUser(mode, form);
-      if (mode === "register") {
-        setMode("login");
-        setMessage("Cadastro realizado. Faça login para continuar.");
-      } else {
-        setUser(payload);
-        setBalance(Number(payload.wallet_balance || 0));
-        setMode("booking");
-      }
-    } catch (error) {
-      setMessage(error.message);
-    }
-  }
-  async function startCharge(event) {
-    event.preventDefault();
-    try {
-      const created = await createChargingOrder({
-        user_id: user.id,
-        charger_code: charger.code,
-        energy_kwh: energy,
-        payment_method: "wallet",
+  const userId = user?.id;
+  const refreshBalance = useCallback(() => {
+    if (!userId) return Promise.resolve();
+    return fetchWallet(userId)
+      .then((wallet) => setBalance(wallet.balance))
+      .catch((error) => {
+        if (error.status === 404) setUser(null);
       });
-      setOrder(created);
-      setBalance((value) => value - Number(created.total_amount || 0));
-      setMessage("Recarga iniciada.");
-    } catch (error) {
-      setMessage(error.message);
-    }
-  }
-  async function addCredit() {
-    await topUpWallet(user.id, 25);
-    setBalance((value) => value + 25);
-  }
-  async function finishCharge() {
-    const result = await finishChargingOrder(order.id, {
-      user_id: user.id,
-      energy_delivered_kwh: energy / 2,
-    });
-    setBalance(result.wallet_balance);
-    setOrder(null);
-    setMessage(
-      `Recarga encerrada. ${formatCurrency(result.refund_amount)} devolvidos.`,
-    );
-  }
+  }, [userId, setUser]);
+
+  useEffect(() => {
+    refreshCharger();
+    const timer = setInterval(refreshCharger, CHARGER_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [refreshCharger]);
+
+  useEffect(() => {
+    refreshBalance();
+  }, [refreshBalance]);
 
   if (!charger)
     return (
-      <div className="chargegrid-page">
-        <div className="public-panel">
-          <p>{message || "Carregando estação..."}</p>
+      <div className="pay-app">
+        <div className="pay-loading">
+          {loadError || "Carregando estação..."}
         </div>
       </div>
     );
+
+  if (!user)
+    return (
+      <div className="pay-app">
+        <AppHeader charger={charger} />
+        <main className="pay-content">
+          <StationCard charger={charger} />
+          <AuthPanel onAuthenticated={setUser} />
+        </main>
+      </div>
+    );
+
   return (
-    <div className="chargegrid-page">
-      <header className="public-header">
-        <span className="public-brand">ChargeGrid</span>
-        <span>Estação {charger.code}</span>
-      </header>
-      <main
-        className={`public-content ${mode === "booking" ? "booking-view-plan" : ""}`}
-      >
-        <section className="station-hero">
-          <span className="page-kicker">Carregador conectado</span>
-          <h1>{charger.name}</h1>
-          <p>
-            {charger.model || "GoodWe HCA G2"} · {charger.power_kw} kW ·{" "}
-            {charger.status === "charging" ? "Em uso" : "Disponível"}
-          </p>
+    <div className="pay-app">
+      <AppHeader charger={charger} user={user} onLogout={() => setUser(null)} />
+      <main className="pay-content with-tabs">
+        <section className="pay-balance-card">
+          <span>Saldo disponível</span>
+          <strong>
+            {balance === null ? "..." : `R$ ${formatCurrency(balance)}`}
+          </strong>
+          <small>Olá, {user.name.split(" ")[0]}</small>
         </section>
-        {mode === "landing" && (
-          <section className="public-panel auth-choice">
-            <h2>Comece sua carga</h2>
-            <button className="public-primary" onClick={() => setMode("login")}>
-              Login
-            </button>
-            <button
-              className="public-secondary"
-              onClick={() => setMode("register")}
-            >
-              Cadastrar
-            </button>
-          </section>
-        )}
-        {["login", "register"].includes(mode) && (
-          <form className="public-panel public-form" onSubmit={authenticate}>
-            <h2>{mode === "login" ? "Entrar" : "Criar conta"}</h2>
-            {mode === "register" && (
-              <label>
-                Nome
-                <input
-                  required
-                  value={form.name}
-                  onChange={(event) =>
-                    setForm({ ...form, name: event.target.value })
-                  }
-                />
-              </label>
-            )}
-            <label>
-              E-mail
-              <input
-                required
-                type="email"
-                value={form.email}
-                onChange={(event) =>
-                  setForm({ ...form, email: event.target.value })
-                }
-              />
-            </label>
-            <label>
-              Senha
-              <input
-                required
-                type="password"
-                value={form.password}
-                onChange={(event) =>
-                  setForm({ ...form, password: event.target.value })
-                }
-              />
-            </label>
-            <button className="public-primary">Continuar</button>
-            {message && <p className="public-error">{message}</p>}
-          </form>
-        )}
-        {mode === "booking" && (
-          <section className="public-panel public-form">
-            <div className="booking-account-panel">
-              <strong>{user.name}</strong>
-              <span>R$ {balance.toFixed(2).replace(".", ",")}</span>
-              <button type="button" onClick={addCredit}>
-                Adicionar R$ 25
-              </button>
-            </div>
-            {order ? (
-              <>
-                <h2>Recarga em andamento</h2>
-                <p>
-                  Iniciada em {formatDateTime(order.created_at || new Date())}
-                </p>
-                <button
-                  type="button"
-                  className="public-primary"
-                  onClick={finishCharge}
-                >
-                  Encerrar recarga
-                </button>
-              </>
-            ) : (
-              <form onSubmit={startCharge}>
-                <h2>Planejar carregamento</h2>
-                <label>
-                  Carga alvo
-                  <input
-                    type="number"
-                    min="1"
-                    max="100"
-                    value={target}
-                    onChange={(event) => setTarget(Number(event.target.value))}
-                  />
-                  %
-                </label>
-                <p>
-                  {energy.toFixed(1)} kWh · {duration} min · R${" "}
-                  {formatCurrency(energy * price)}
-                </p>
-                <button className="public-primary">Iniciar com carteira</button>
-              </form>
-            )}
-            {message && <p className="public-success">{message}</p>}
-          </section>
-        )}
+        <Outlet
+          context={{
+            charger,
+            user,
+            balance: balance ?? 0,
+            refreshCharger,
+            refreshBalance,
+          }}
+        />
       </main>
+      <nav className="pay-tabs" aria-label="Seções do app">
+        {TABS.map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <NavLink
+              key={tab.label}
+              to={tab.to}
+              end={tab.end}
+              className={({ isActive }) => (isActive ? "active" : "")}
+            >
+              <Icon size={20} aria-hidden="true" />
+              <span>{tab.label}</span>
+            </NavLink>
+          );
+        })}
+      </nav>
     </div>
+  );
+}
+
+function AppHeader({ charger, user, onLogout }) {
+  return (
+    <header className="pay-header">
+      <div>
+        <span className="pay-brand">ChargeGrid</span>
+        <span className="pay-station-code">Estação {charger.code}</span>
+      </div>
+      {user && (
+        <button
+          type="button"
+          className="pay-icon-button"
+          onClick={onLogout}
+          aria-label="Sair da conta"
+        >
+          <LogOut size={18} aria-hidden="true" />
+        </button>
+      )}
+    </header>
+  );
+}
+
+export function StationCard({ charger }) {
+  const inUse = charger.status === "charging";
+  return (
+    <section className="pay-station">
+      <span className="page-kicker">Carregador conectado</span>
+      <h1>{charger.name}</h1>
+      <p>
+        {charger.model || "GoodWe HCA G2"} · {charger.power_kw} kW ·{" "}
+        <span className={inUse ? "pay-status busy" : "pay-status free"}>
+          {inUse ? "Em uso" : "Disponível"}
+        </span>
+      </p>
+    </section>
+  );
+}
+
+function AuthPanel({ onAuthenticated }) {
+  const [mode, setMode] = useState("landing");
+  const [form, setForm] = useState({ name: "", email: "", password: "" });
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+
+  async function authenticate(event) {
+    event.preventDefault();
+    setSending(true);
+    try {
+      const payload = await authUser(mode, form, "cliente");
+      if (mode === "register") {
+        const logged = await authUser("login", form);
+        onAuthenticated(logged);
+      } else onAuthenticated(payload);
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (mode === "landing")
+    return (
+      <section className="pay-panel pay-auth-choice">
+        <h2>Comece sua carga</h2>
+        <p>
+          Entre na sua conta para pagar a recarga, colocar saldo e acompanhar
+          seus gastos.
+        </p>
+        <button className="public-primary" onClick={() => setMode("login")}>
+          Entrar
+        </button>
+        <button className="public-secondary" onClick={() => setMode("register")}>
+          Criar conta
+        </button>
+      </section>
+    );
+
+  const update = (field) => (event) =>
+    setForm({ ...form, [field]: event.target.value });
+
+  return (
+    <form className="pay-panel pay-form" onSubmit={authenticate}>
+      <h2>{mode === "login" ? "Entrar" : "Criar conta"}</h2>
+      {mode === "register" && (
+        <label>
+          Nome
+          <input
+            required
+            autoComplete="name"
+            value={form.name}
+            onChange={update("name")}
+          />
+        </label>
+      )}
+      <label>
+        E-mail
+        <input
+          required
+          type="email"
+          autoComplete="email"
+          inputMode="email"
+          value={form.email}
+          onChange={update("email")}
+        />
+      </label>
+      <label>
+        Senha
+        <input
+          required
+          type="password"
+          autoComplete={mode === "login" ? "current-password" : "new-password"}
+          value={form.password}
+          onChange={update("password")}
+        />
+      </label>
+      <button className="public-primary" disabled={sending}>
+        {sending ? "Aguarde..." : "Continuar"}
+      </button>
+      <button
+        type="button"
+        className="public-text-button"
+        onClick={() => {
+          setMessage("");
+          setMode(mode === "login" ? "register" : "login");
+        }}
+      >
+        {mode === "login" ? "Ainda não tenho conta" : "Já tenho conta"}
+      </button>
+      {message && <p className="public-error">{message}</p>}
+    </form>
   );
 }

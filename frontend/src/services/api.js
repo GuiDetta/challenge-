@@ -4,20 +4,21 @@ import { getApiError } from "../utils/formatters";
 async function request(path, options = {}) {
   const response = await fetch(`${API_URL}${path}`, options);
   const payload = await response.json().catch(() => null);
-  if (!response.ok)
-    throw new Error(
+  if (!response.ok) {
+    const error = new Error(
       getApiError(payload, "Não foi possível concluir a operação."),
     );
+    error.status = response.status;
+    throw error;
+  }
   return payload;
 }
 
-export function authUser(mode, form) {
+export function authUser(mode, form, role = "lojista") {
   return request(`/api/auth/${mode === "register" ? "register" : "login"}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(
-      mode === "register" ? { ...form, role: "lojista" } : form,
-    ),
+    body: JSON.stringify(mode === "register" ? { ...form, role } : form),
   });
 }
 
@@ -148,12 +149,24 @@ export function deleteCharger(planId, chargerId, code, ownerId) {
   );
 }
 
-export function topUpWallet(userId, amount) {
+export function topUpWallet(userId, amount, method = "pix") {
   return request("/api/wallet/top-ups", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user_id: userId, amount }),
+    body: JSON.stringify({ user_id: userId, amount, method }),
   });
+}
+
+export function fetchWallet(userId) {
+  return request(`/api/wallet/${encodeURIComponent(userId)}`);
+}
+
+export function fetchUserOrders(userId) {
+  return request(`/api/charging-orders?user_id=${encodeURIComponent(userId)}`);
+}
+
+export function fetchTariff() {
+  return request("/api/tariff");
 }
 
 export function createChargingOrder(order) {

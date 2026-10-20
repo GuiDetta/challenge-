@@ -18,3 +18,4 @@ class ChargingOrderFinish(BaseModel):
 class WalletTopUp(BaseModel):
     user_id: str
     amount: Literal[10, 25, 50, 100]
+    method: Literal["pix", "card"] = "pix"

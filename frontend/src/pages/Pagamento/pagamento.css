@@ -1,8 +1,459 @@
-.pagamento-page,
-.chargegrid-page {
+.pay-app {
+  --pay-width: 480px;
+  --pay-tabs-height: 64px;
   min-height: 100vh;
+  min-height: 100dvh;
+  background:
+    radial-gradient(circle at 85% 0%, rgba(255, 0, 10, 0.14), transparent 40%),
+    var(--bg);
+  color: var(--ink);
 }
 
-.chargegrid-page .public-panel {
+.pay-loading {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.pay-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: min(var(--pay-width), 100%);
+  margin: 0 auto;
+  padding: calc(14px + env(safe-area-inset-top)) 16px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  background: rgba(17, 16, 16, 0.92);
+  backdrop-filter: blur(8px);
+}
+.pay-header > div {
+  display: grid;
+  gap: 3px;
+}
+.pay-brand {
+  color: var(--red);
+  font: 600 13px "DM Mono", monospace;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.pay-station-code {
+  color: var(--muted);
+  font: 10px "DM Mono", monospace;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+.pay-icon-button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.pay-content {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  width: min(var(--pay-width), 100%);
+  margin: 0 auto;
+  padding: 18px 16px 28px;
+}
+.pay-content.with-tabs {
+  padding-bottom: calc(var(--pay-tabs-height) + 28px + env(safe-area-inset-bottom));
+}
+
+.pay-balance-card {
+  display: grid;
+  gap: 4px;
+  padding: 18px;
+  border: 1px solid rgba(255, 0, 10, 0.35);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(255, 0, 10, 0.2), rgba(25, 24, 23, 0.95));
+}
+.pay-balance-card span,
+.pay-balance-card small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.pay-balance-card strong {
+  font: 600 38px/1 "Barlow Condensed", sans-serif;
+  letter-spacing: 0.5px;
+}
+
+.pay-station .page-kicker {
+  display: block;
+  margin-bottom: 6px;
+}
+.pay-station h1 {
+  margin: 0;
+  font: 600 clamp(30px, 9vw, 42px)/0.95 "Barlow Condensed", sans-serif;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+.pay-station p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.pay-status.free {
+  color: var(--green);
+}
+.pay-status.busy {
+  color: var(--amber);
+}
+
+.pay-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(25, 24, 23, 0.94);
+}
+.pay-panel h2 {
+  margin: 0;
+  font: 600 26px/1 "Barlow Condensed", sans-serif;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.pay-panel > p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.pay-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.pay-sim-badge {
+  padding: 4px 8px;
+  border: 1px solid var(--amber);
+  border-radius: 999px;
+  color: var(--amber);
+  font: 9px "DM Mono", monospace;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.pay-form {
+  display: grid;
+  gap: 14px;
+}
+.pay-form label,
+.pay-label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font: 10px "DM Mono", monospace;
+  text-transform: uppercase;
+}
+.pay-form input {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: #171515;
+  color: var(--ink);
+  font-size: 16px;
+  outline: none;
+}
+.pay-form input:focus {
+  border-color: var(--red);
+}
+.pay-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.pay-app .public-primary,
+.pay-app .public-secondary {
+  min-height: 50px;
+  border-radius: 14px;
+}
+.pay-app .public-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pay-app .public-text-button {
+  min-height: 40px;
+}
+.pay-app .public-error,
+.pay-app .public-success {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.pay-app .public-error {
+  border: 1px solid rgba(255, 0, 10, 0.5);
+  background: rgba(255, 0, 10, 0.1);
+  color: #ff8a8e;
+}
+.pay-app .public-success {
+  border: 1px solid rgba(53, 216, 121, 0.45);
+  background: rgba(53, 216, 121, 0.1);
+  color: var(--green);
+}
+.pay-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.pay-auth-choice {
+  gap: 12px;
+}
+
+.pay-chips {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.pay-chips button {
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink);
+  font: 12px "DM Mono", monospace;
+}
+.pay-chips button.selected,
+.pay-methods button.selected {
+  border-color: var(--red);
+  background: rgba(255, 0, 10, 0.14);
+  color: var(--ink);
+}
+
+.pay-methods {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.pay-methods button {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+}
+.pay-methods strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+.pay-methods small {
+  font-size: 11px;
+}
+
+.pay-tariff {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.pay-tariff.peak {
+  color: var(--amber);
+}
+.pay-warning {
+  margin: 0;
+  color: var(--amber);
+  font-size: 13px;
+}
+.pay-warning a {
+  color: var(--ink);
+}
+.pay-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.pay-step-title {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+}
+.pay-pix-qr {
+  justify-self: center;
+  width: 200px;
+  height: 200px;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.pay-summary {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+}
+.pay-summary > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+}
+.pay-summary > div + div {
+  border-top: 1px solid var(--line-soft);
+}
+.pay-summary dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+.pay-summary dd {
+  margin: 0;
+  font-size: 14px;
+  text-align: right;
+}
+.pay-summary .total dd {
+  font: 600 22px/1 "Barlow Condensed", sans-serif;
+}
+
+.pay-progress {
+  overflow: hidden;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+}
+.pay-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+  transition: width 1s linear;
+}
+
+.pay-totals {
+  display: grid;
+  grid-auto-columns: 1fr;
+  grid-auto-flow: column;
+  gap: 8px;
+}
+.pay-totals > div {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.pay-totals span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.pay-totals strong {
+  font-size: 15px;
+}
+
+.pay-list h3 {
+  margin: 4px 2px 8px;
+  color: var(--muted);
+  font: 10px "DM Mono", monospace;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+.pay-list ul {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 16px;
+  background: var(--surface);
+  list-style: none;
+}
+.pay-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+}
+.pay-list li + li {
+  border-top: 1px solid var(--line-soft);
+}
+.pay-list li > div {
+  display: grid;
+  gap: 3px;
   min-width: 0;
+}
+.pay-list li strong {
+  font-size: 14px;
+}
+.pay-list li small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.pay-list li > span,
+.pay-order-side > span {
+  font-size: 14px;
+  white-space: nowrap;
+}
+.pay-order-side {
+  justify-items: end;
+}
+.pay-in {
+  color: var(--green);
+}
+.pay-out {
+  color: #ff6b70;
+}
+.pay-order-status.active {
+  color: var(--amber) !important;
+}
+.pay-order-status.completed {
+  color: var(--green) !important;
+}
+.pay-empty {
+  margin: 0;
+  padding: 24px 12px;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.pay-tabs {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  width: min(var(--pay-width), 100%);
+  margin: 0 auto;
+  padding-bottom: env(safe-area-inset-bottom);
+  border-top: 1px solid var(--line);
+  background: rgba(17, 16, 16, 0.96);
+  backdrop-filter: blur(8px);
+}
+.pay-tabs a {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 4px;
+  min-height: var(--pay-tabs-height);
+  color: var(--muted);
+  font-size: 11px;
+  text-decoration: none;
+}
+.pay-tabs a.active {
+  color: var(--red);
 }

@@ -1,12 +1,34 @@
+from datetime import datetime
 from io import BytesIO
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
 from app.main import app
+from app.services import order_service
 
 client = TestClient(app)
+
+
+@pytest.fixture
+def off_peak(monkeypatch: pytest.MonkeyPatch) -> None:
+    # os valores esperados usam a tarifa fora de pico; sem isso a suíte falha depois das 18h
+    real_tariff = order_service.current_tariff
+    monkeypatch.setattr(order_service, "current_tariff", lambda now=None: real_tariff((now or datetime.now().astimezone()).replace(hour=10)))
+
+
+def new_real_charger(owner_id: str, name: str) -> dict:
+    image = Image.new("RGB", (160, 120), "white")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    plan = client.post("/api/plans", files={"file": (f"{name}.png", buffer.getvalue(), "image/png")}, headers={"X-User-Id": owner_id}).json()
+    return client.post(f"/api/plans/{plan['plan_id']}/chargers", json={"name": name, "x": 30, "y": 40, "kind": "real"}, headers={"X-User-Id": owner_id}).json()
+
+
+def new_driver(prefix: str) -> dict:
+    return client.post("/api/auth/register", json={"name": "Motorista", "email": f"{prefix}-{uuid4().hex}@example.com", "password": "secret123", "role": "cliente"}).json()
 
 
 def test_health() -> None:
@@ -49,7 +71,7 @@ def test_plans_are_isolated_by_owner() -> None:
     assert client.get("/api/plans?owner_id=owner-b").json() == []
 
 
-def test_charging_order_requires_and_debits_wallet_balance() -> None:
+def test_charging_order_requires_and_debits_wallet_balance(off_peak: None) -> None:
     email = f"wallet-{uuid4().hex}@example.com"
     user = client.post(
         "/api/auth/register",
@@ -76,7 +98,7 @@ def test_charging_order_requires_and_debits_wallet_balance() -> None:
     assert client.post("/api/charging-orders", json=order).status_code == 402
 
 
-def test_finishing_order_refunds_undelivered_energy() -> None:
+def test_finishing_order_refunds_undelivered_energy(off_peak: None) -> None:
     email = f"refund-{uuid4().hex}@example.com"
     user = client.post(
         "/api/auth/register",
@@ -360,3 +382,43 @@ def test_upload_detects_parking_slots() -> None:
     plan = response.json()
     assert len(plan["rooms"]) >= 4
     assert all(room["name"].startswith("Vaga") for room in plan["rooms"][:3])
+
+
+def test_tariff_changes_at_peak_hours() -> None:
+    morning = order_service.current_tariff(datetime(2026, 10, 20, 10, 0).astimezone())
+    evening = order_service.current_tariff(datetime(2026, 10, 20, 19, 0).astimezone())
+    night = order_service.current_tariff(datetime(2026, 10, 20, 23, 0).astimezone())
+    assert (morning["price_per_kwh"], morning["is_peak"]) == (1.99, False)
+    assert (evening["price_per_kwh"], evening["is_peak"]) == (2.79, True)
+    assert evening["next_change_at"].startswith("2026-10-20T22:00")
+    assert night["next_change_at"].startswith("2026-10-21T18:00")
+    assert client.get("/api/tariff").json()["price_per_kwh"] in (1.99, 2.79)
+
+
+def test_wallet_statement_lists_top_ups_debits_and_refunds(off_peak: None) -> None:
+    charger = new_real_charger("statement-owner", "Statement HC2")
+    user = new_driver("statement")
+    top_up = client.post("/api/wallet/top-ups", json={"user_id": user["id"], "amount": 50, "method": "card"})
+    assert top_up.status_code == 201
+    assert top_up.json()["wallet_balance"] == 50
+    order = client.post("/api/charging-orders", json={"user_id": user["id"], "charger_code": charger["code"], "energy_kwh": 10, "payment_method": "wallet"}).json()
+    client.post(f"/api/charging-orders/{order['id']}/finish", json={"user_id": user["id"], "energy_delivered_kwh": 5})
+
+    statement = client.get(f"/api/wallet/{user['id']}").json()
+    assert statement["balance"] == 40.05
+    assert sorted(item["method"] for item in statement["transactions"]) == ["card", "charge", "refund"]
+
+
+def test_order_history_only_shows_own_orders(off_peak: None) -> None:
+    charger = new_real_charger("history-owner", "History HC2")
+    user = new_driver("history")
+    other = new_driver("history-other")
+    for driver in (user, other):
+        client.post("/api/wallet/top-ups", json={"user_id": driver["id"], "amount": 25})
+    client.post("/api/charging-orders", json={"user_id": user["id"], "charger_code": charger["code"], "energy_kwh": 2, "payment_method": "wallet"})
+
+    history = client.get(f"/api/charging-orders?user_id={user['id']}").json()
+    assert len(history) == 1
+    assert history[0]["charger_name"] == "History HC2"
+    assert client.get(f"/api/charging-orders?user_id={other['id']}").json() == []
+    assert client.get("/api/wallet/nao-existe").status_code == 404

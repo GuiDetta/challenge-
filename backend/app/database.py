@@ -164,6 +164,21 @@ class Database:
             self.ensure_device_owner_column()
             self.ensure_device_active_column()
             self.ensure_plan_owner_column()
+            self.ensure_wallet_method_column()
+
+    def ensure_wallet_method_column(self) -> None:
+        with self.connect() as connection:
+            columns = connection.execute("PRAGMA table_info(wallet_transactions)").fetchall()
+            if not any(column[1] == "method" for column in columns):
+                connection.execute("ALTER TABLE wallet_transactions ADD COLUMN method TEXT")
+
+    @staticmethod
+    def _wallet_balance(connection: sqlite3.Connection, user_id: str) -> float:
+        balance = connection.execute(
+            "SELECT COALESCE(SUM(CASE WHEN type = 'top_up' THEN amount ELSE -amount END), 0) FROM wallet_transactions WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
+        return round(float(balance), 2)
 
     def ensure_device_kind_column(self) -> None:
         with self.connect() as connection:
@@ -320,8 +335,7 @@ class Database:
             return None
         user = {key: row[key] for key in ("id", "name", "email", "role", "created_at")}
         with self.connect() as connection:
-            balance = connection.execute("SELECT COALESCE(SUM(CASE WHEN type = 'top_up' THEN amount ELSE -amount END), 0) FROM wallet_transactions WHERE user_id = ?", (row["id"],)).fetchone()[0]
-        user["wallet_balance"] = round(float(balance), 2)
+            user["wallet_balance"] = self._wallet_balance(connection, row["id"])
         return user
 
     def get_charger_by_code(self, code: str) -> dict[str, Any] | None:
@@ -340,15 +354,11 @@ class Database:
 
     def create_order(self, order: dict[str, Any]) -> dict[str, Any]:
         with self.connect() as connection:
-            balance = connection.execute(
-                "SELECT COALESCE(SUM(CASE WHEN type = 'top_up' THEN amount ELSE -amount END), 0) FROM wallet_transactions WHERE user_id = ?",
-                (order["user_id"],),
-            ).fetchone()[0]
-            if float(balance) < float(order["total_amount"]):
+            if self._wallet_balance(connection, order["user_id"]) < float(order["total_amount"]):
                 raise InsufficientBalanceError
             connection.execute(
-                "INSERT INTO wallet_transactions (id, user_id, amount, type, created_at) VALUES (?, ?, ?, ?, ?)",
-                (str(uuid4()), order["user_id"], order["total_amount"], "debit", self.now()),
+                "INSERT INTO wallet_transactions (id, user_id, amount, type, method, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (str(uuid4()), order["user_id"], order["total_amount"], "debit", "charge", self.now()),
             )
             connection.execute("INSERT INTO charging_orders (id, user_id, charger_code, energy_kwh, price_per_kwh, total_amount, scheduled_at, estimated_duration_minutes, payment_method, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (order["id"], order["user_id"], order["charger_code"], order["energy_kwh"], order["price_per_kwh"], order["total_amount"], order["scheduled_at"], order["estimated_duration_minutes"], order["payment_method"], "active", self.now()))
         return self.get_order(order["id"])
@@ -412,19 +422,34 @@ class Database:
                 )
             if refund_amount > 0:
                 connection.execute(
-                    "INSERT INTO wallet_transactions (id, user_id, amount, type, created_at) VALUES (?, ?, ?, 'top_up', ?)",
+                    "INSERT INTO wallet_transactions (id, user_id, amount, type, method, created_at) VALUES (?, ?, ?, 'top_up', 'refund', ?)",
                     (str(uuid4()), user_id, refund_amount, self.now()),
                 )
-            balance = connection.execute(
-                "SELECT COALESCE(SUM(CASE WHEN type = 'top_up' THEN amount ELSE -amount END), 0) FROM wallet_transactions WHERE user_id = ?",
-                (user_id,),
-            ).fetchone()[0]
-        return {"order_id": order_id, "energy_delivered_kwh": delivered, "refund_amount": refund_amount, "wallet_balance": round(float(balance), 2)}
+            balance = self._wallet_balance(connection, user_id)
+        return {"order_id": order_id, "energy_delivered_kwh": delivered, "refund_amount": refund_amount, "wallet_balance": balance}
 
     def add_wallet_transaction(self, transaction: dict[str, Any]) -> dict[str, Any]:
         with self.connect() as connection:
-            connection.execute("INSERT INTO wallet_transactions (id, user_id, amount, type, created_at) VALUES (?, ?, ?, ?, ?)", (transaction["id"], transaction["user_id"], transaction["amount"], transaction["type"], self.now()))
-        return transaction
+            connection.execute("INSERT INTO wallet_transactions (id, user_id, amount, type, method, created_at) VALUES (?, ?, ?, ?, ?, ?)", (transaction["id"], transaction["user_id"], transaction["amount"], transaction["type"], transaction.get("method"), self.now()))
+            balance = self._wallet_balance(connection, transaction["user_id"])
+        return {**transaction, "wallet_balance": balance}
+
+    def wallet_statement(self, user_id: str, limit: int = 50) -> dict[str, Any]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT id, amount, type, method, created_at FROM wallet_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+            balance = self._wallet_balance(connection, user_id)
+        return {"balance": balance, "transactions": [dict(row) for row in rows]}
+
+    def list_user_orders(self, user_id: str, limit: int = 30) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT o.id, o.charger_code, d.name AS charger_name, o.energy_kwh, o.price_per_kwh, o.total_amount, o.status, o.created_at FROM charging_orders o LEFT JOIN devices d ON d.code = o.charger_code WHERE o.user_id = ? ORDER BY o.created_at DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def report_summary(self, owner_id: str | None = None) -> dict[str, Any]:
         self.complete_due_orders()

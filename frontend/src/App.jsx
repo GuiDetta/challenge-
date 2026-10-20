@@ -12,7 +12,11 @@ import Dashboard from "./pages/Dashboard/dashboard";
 import Info from "./pages/Info/info";
 import Carregadores from "./pages/Carregadores/carregadores";
 import Login from "./pages/Login/login";
-import Pagamento from "./pages/Pagamento/pagamento";
+import Pagamento, { BackToStation } from "./pages/Pagamento/pagamento";
+import CarteiraTab from "./pages/Pagamento/CarteiraTab";
+import ExtratoTab from "./pages/Pagamento/ExtratoTab";
+import HistoricoTab from "./pages/Pagamento/HistoricoTab";
+import RecargaTab from "./pages/Pagamento/RecargaTab";
 import Relatorio from "./pages/Relatorio/relatorio";
 import { fetchPlan } from "./services/api";
 import { useChargerPolling } from "./hooks/useChargerPolling";
@@ -30,7 +34,13 @@ export default function App() {
 function RouterEntry() {
   return useLocation().pathname.startsWith("/pagamentos/") ? (
     <Routes>
-      <Route path="/pagamentos/:chargerCode" element={<Pagamento />} />
+      <Route path="/pagamentos/:chargerCode" element={<Pagamento />}>
+        <Route index element={<RecargaTab />} />
+        <Route path="carteira" element={<CarteiraTab />} />
+        <Route path="extrato" element={<ExtratoTab />} />
+        <Route path="historico" element={<HistoricoTab />} />
+        <Route path="*" element={<BackToStation />} />
+      </Route>
     </Routes>
   ) : (
     <AppShell />
