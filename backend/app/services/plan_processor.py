@@ -17,9 +17,14 @@ except ImportError:  # pragma: no cover - dependency is declared but optional at
     Output = None
 
 
+def read_grayscale(image_path: Path) -> np.ndarray | None:
+    # cv2.imread não abre caminhos com acento no Windows (ex.: "Área de Trabalho")
+    return cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+
+
 class PlanProcessor:
     def process(self, image_path: Path, plan_id: str) -> PlanMap:
-        image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        image = read_grayscale(image_path)
         if image is None:
             raise ValueError("Não foi possível ler a imagem enviada.")
 
@@ -508,7 +513,7 @@ class PlanProcessor:
         if image_type == "jpg":
             image_type = "jpeg"
         image_data = f"data:image/{image_type};base64,{source_data}"
-        image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        image = read_grayscale(image_path)
         if image is None or image.shape != (height, width):
             raise ValueError("Não foi possível gerar a camada digital da planta.")
         # Preserve the source coordinates while making every detected stroke a solid red.

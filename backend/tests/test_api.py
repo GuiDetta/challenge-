@@ -422,3 +422,17 @@ def test_order_history_only_shows_own_orders(off_peak: None) -> None:
     assert history[0]["charger_name"] == "History HC2"
     assert client.get(f"/api/charging-orders?user_id={other['id']}").json() == []
     assert client.get("/api/wallet/nao-existe").status_code == 404
+
+
+def test_plan_processor_reads_image_from_accented_path(tmp_path) -> None:
+    from app.services.plan_processor import PlanProcessor
+
+    folder = tmp_path / "Área de Trabalho"
+    folder.mkdir()
+    image = Image.new("RGB", (200, 150), "white")
+    ImageDraw.Draw(image).rectangle((20, 20, 180, 130), outline="black", width=4)
+    path = folder / "planta.png"
+    image.save(path)
+
+    plan = PlanProcessor().process(path, "plano-acento")
+    assert (plan.width, plan.height) == (200, 150)
